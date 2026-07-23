@@ -1,0 +1,38 @@
+@import "tailwindcss";
+
+/* Dark mode via classe .dark no <html> */
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  /* Tema no estilo SalesGrid: fundo lavanda claro, superfícies brancas,
+     azul-puro como cor de marca e tipografia Figtree */
+  --bg: #f4f4fc;
+  --surface: #ffffff;
+  --border: #e5e7eb;
+  --text: #111827;
+  --text-muted: #6b7280;
+  --sidebar-bg: #ffffff;
+  --primary: #0000fe;
+  --primary-dark: #0000c2;
+}
+
+.dark {
+  --bg: #0f172a;
+  --surface: #1e293b;
+  --border: #334155;
+  --text: #f1f5f9;
+  --text-muted: #94a3b8;
+  --sidebar-bg: #1e293b;
+  --primary: #4d4dff;
+  --primary-dark: #0000c2;
+}
+
+html, body { height: 100%; }
+
+body {
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  transition: background-color 0.2s, color 0.2s;
+}
