@@ -395,6 +395,18 @@ export default function ViagensPage() {
                   );
                 })}
               </tbody>
+              {/* Totalizador do que está filtrado, no pé da tabela. */}
+              <tfoot>
+                <tr className="border-t-2 border-slate-300 bg-[var(--surface)] font-bold dark:border-slate-600">
+                  <td className="sticky left-0 z-10 bg-[var(--surface)] px-3 py-2 uppercase tracking-wide text-[var(--text)]">Total</td>
+                  {porMes.map((p, i) => (
+                    <td key={i} className="px-2 py-2 text-right tabular-nums">
+                      {p.valor !== 0 ? formatNumero(p.valor) : <span className="text-[var(--text-muted)]/40">–</span>}
+                    </td>
+                  ))}
+                  <td className="border-l border-[var(--border)] px-2 py-2 text-right tabular-nums">{formatNumero(total)}</td>
+                </tr>
+              </tfoot>
             </table>
           </div>
 
