@@ -208,7 +208,6 @@ export default function CustosPage() {
     chave: string; depth: number; nome: string; codigoTag?: string; arr: number[];
     tipo: "conta" | "unidade" | "fornecedor";
     expandivel?: boolean; aberto?: boolean; carregando?: boolean; onToggle?: () => void; zebra?: boolean;
-    onDetalhe?: () => void; detAberto?: boolean; carregandoDet?: boolean;
   }): ReactNode {
     const total = somaVis(opts.arr);
     const cel = "px-2 py-1.5 text-right tabular-nums whitespace-nowrap";
@@ -228,30 +227,16 @@ export default function CustosPage() {
       <tr key={opts.chave} className={cn(sep, peso, zebra && "bg-gray-50 dark:bg-neutral-800", "hover:bg-black/[0.02] dark:hover:bg-white/[0.03]")}>
         <td className={cn("sticky left-0 z-10 whitespace-nowrap pr-3", bgCel)}
           style={{ paddingLeft: `${12 + opts.depth * 16}px` }}>
-          <div className="flex items-center gap-1">
-            <button onClick={opts.onToggle}
-              className={cn("flex items-center gap-1 py-1.5 text-left", opts.expandivel ? "cursor-pointer" : "cursor-default")}>
-              {opts.carregando ? <Loader2 size={13} className="animate-spin shrink-0" />
-                : opts.expandivel ? (opts.aberto ? <ChevronDown size={13} className="shrink-0" /> : <ChevronRight size={13} className="shrink-0" />)
-                : <span className="inline-block w-[13px] shrink-0" />}
-              <span className={cn(mudo && "text-[var(--text-muted)]")}>
-                {opts.codigoTag && <span className="text-[var(--text-muted)] mr-1">{opts.codigoTag}</span>}
-                {opts.nome}
-              </span>
-            </button>
-            {opts.onDetalhe && (
-              <button onClick={opts.onDetalhe}
-                title={opts.detAberto ? "Ocultar unidades e fornecedores" : "Ver unidades e fornecedores desta conta"}
-                className={cn(
-                  "shrink-0 rounded p-1 transition-colors",
-                  opts.detAberto
-                    ? "bg-[var(--primary)] text-white"
-                    : "text-[var(--text-muted)] hover:bg-black/[0.06] hover:text-[var(--text)] dark:hover:bg-white/10"
-                )}>
-                {opts.carregandoDet ? <Loader2 size={12} className="animate-spin" /> : <Users size={12} />}
-              </button>
-            )}
-          </div>
+          <button onClick={opts.onToggle}
+            className={cn("flex items-center gap-1 py-1.5 text-left", opts.expandivel ? "cursor-pointer" : "cursor-default")}>
+            {opts.carregando ? <Loader2 size={13} className="animate-spin shrink-0" />
+              : opts.expandivel ? (opts.aberto ? <ChevronDown size={13} className="shrink-0" /> : <ChevronRight size={13} className="shrink-0" />)
+              : <span className="inline-block w-[13px] shrink-0" />}
+            <span className={cn(mudo && "text-[var(--text-muted)]")}>
+              {opts.codigoTag && <span className="text-[var(--text-muted)] mr-1">{opts.codigoTag}</span>}
+              {opts.nome}
+            </span>
+          </button>
         </td>
         {mesesVis.map((m) => {
           const v = opts.arr[m] ?? 0;
@@ -272,7 +257,8 @@ export default function CustosPage() {
 
   function renderNo(no: No, depth: number, out: ReactNode[]) {
     const folha = no.filhos.length === 0;
-    // Folha abre o fornecedor pela própria seta; do N4 pra baixo, pelo ícone.
+    // Folha abre o fornecedor pela própria seta; conta com filhos, pela linha
+    // "Por unidade / fornecedor" que aparece dentro dela.
     const detalhavel = no.codigosFonte.length > 0 && (folha || no.nivel >= NIVEL_DETALHE);
     const detAberto = abertosDet.has(no.key);
     const filhosAbertos = !folha && abertos.has(no.key);
@@ -286,12 +272,31 @@ export default function CustosPage() {
       aberto: folha ? detAberto : filhosAbertos,
       carregando: folha && carregandoEste,
       onToggle: () => alternarNo(no),
-      onDetalhe: !folha && detalhavel ? () => alternarDetalhe(no) : undefined,
-      detAberto, carregandoDet: carregandoEste,
     }));
 
-    if (detalhavel && detAberto) renderDetalhe(no, depth, out);
-    if (filhosAbertos) for (const f of no.filhos) renderNo(f, depth + 1, out);
+    // Folha: a própria seta já abriu o detalhe.
+    if (folha) { if (detAberto) renderDetalhe(no, depth, out); return; }
+    if (!filhosAbertos) return;
+
+    // Conta com filhos: a primeira linha de dentro abre o consolidado por
+    // unidade → fornecedor da conta inteira; depois vêm os filhos.
+    if (detalhavel) {
+      out.push(
+        <tr key={`det-${no.key}`} className="border-t border-[var(--border)] hover:bg-black/[0.02] dark:hover:bg-white/[0.03]">
+          <td colSpan={nCols} className="whitespace-nowrap" style={{ paddingLeft: `${12 + (depth + 1) * 16}px` }}>
+            <button onClick={() => alternarDetalhe(no)}
+              className="flex items-center gap-1 py-1.5 text-left text-[var(--text-muted)] hover:text-[var(--text)]">
+              {carregandoEste ? <Loader2 size={13} className="animate-spin shrink-0" />
+                : detAberto ? <ChevronDown size={13} className="shrink-0" /> : <ChevronRight size={13} className="shrink-0" />}
+              <Users size={12} className="shrink-0" />
+              <span className="text-[11px] uppercase tracking-wide">Por unidade / fornecedor</span>
+            </button>
+          </td>
+        </tr>
+      );
+      if (detAberto) renderDetalhe(no, depth + 1, out);
+    }
+    for (const f of no.filhos) renderNo(f, depth + 1, out);
   }
 
   // Detalhe da conta: unidade → fornecedor, um nível abaixo da linha da conta.
@@ -349,8 +354,8 @@ export default function CustosPage() {
         <div>
           <h1 className="text-xl font-bold text-[var(--text)]">Análise de custos</h1>
           <p className="text-xs text-[var(--text-muted)]">
-            Contas N4 de custo e despesa, da maior para a menor · o ícone <Users size={11} className="inline align-[-1px]" /> abre
-            unidade → fornecedor consolidado da conta; a seta detalha até a folha
+            Contas N4 de custo e despesa, da maior para a menor · abra a conta para ver o consolidado
+            por unidade → fornecedor ou seguir descendo até a folha
           </p>
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-2">
