@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { ChevronDown, ChevronRight, RefreshCw, Loader2, Users } from "lucide-react";
+import { ChevronDown, ChevronRight, RefreshCw, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MESES_CURTO, formatNumero } from "@/lib/labels";
 import type { DreLinha, DreResposta } from "@/lib/types";
@@ -32,9 +32,6 @@ function temSufixo(nome: string): boolean {
 // drill de fornecedor (num nó unificado há mais de um: VEN + ADM). A RPC agrega
 // por prefixo, então num nó com filhos basta o próprio código.
 type No = { key: string; nome: string; codigo?: string; nivel: number; realizado: number[]; filhos: No[]; codigosFonte: string[] };
-
-// A partir do N4 a conta já é analisável por fornecedor mesmo tendo filhos.
-const NIVEL_DETALHE = 4;
 
 // mostrarCodigo: no modo unificado as contas não têm um código único, então a
 // tela fica só com os nomes — inclusive nas que não foram agrupadas.
@@ -257,9 +254,8 @@ export default function CustosPage() {
 
   function renderNo(no: No, depth: number, out: ReactNode[]) {
     const folha = no.filhos.length === 0;
-    // Folha abre o fornecedor pela própria seta; conta com filhos, pela linha
-    // "Por unidade / fornecedor" que aparece dentro dela.
-    const detalhavel = no.codigosFonte.length > 0 && (folha || no.nivel >= NIVEL_DETALHE);
+    // O detalhe por unidade → fornecedor sai na folha, pela própria seta.
+    const detalhavel = folha && no.codigosFonte.length > 0;
     const detAberto = abertosDet.has(no.key);
     const filhosAbertos = !folha && abertos.has(no.key);
     const carregandoEste = carregandoDet.has(no.key);
@@ -274,29 +270,8 @@ export default function CustosPage() {
       onToggle: () => alternarNo(no),
     }));
 
-    // Folha: a própria seta já abriu o detalhe.
     if (folha) { if (detAberto) renderDetalhe(no, depth, out); return; }
-    if (!filhosAbertos) return;
-
-    // Conta com filhos: a primeira linha de dentro abre o consolidado por
-    // unidade → fornecedor da conta inteira; depois vêm os filhos.
-    if (detalhavel) {
-      out.push(
-        <tr key={`det-${no.key}`} className="border-t border-[var(--border)] hover:bg-black/[0.02] dark:hover:bg-white/[0.03]">
-          <td colSpan={nCols} className="whitespace-nowrap" style={{ paddingLeft: `${12 + (depth + 1) * 16}px` }}>
-            <button onClick={() => alternarDetalhe(no)}
-              className="flex items-center gap-1 py-1.5 text-left text-[var(--text-muted)] hover:text-[var(--text)]">
-              {carregandoEste ? <Loader2 size={13} className="animate-spin shrink-0" />
-                : detAberto ? <ChevronDown size={13} className="shrink-0" /> : <ChevronRight size={13} className="shrink-0" />}
-              <Users size={12} className="shrink-0" />
-              <span className="text-[11px] uppercase tracking-wide">Por unidade / fornecedor</span>
-            </button>
-          </td>
-        </tr>
-      );
-      if (detAberto) renderDetalhe(no, depth + 1, out);
-    }
-    for (const f of no.filhos) renderNo(f, depth + 1, out);
+    if (filhosAbertos) for (const f of no.filhos) renderNo(f, depth + 1, out);
   }
 
   // Detalhe da conta: unidade → fornecedor, um nível abaixo da linha da conta.
@@ -354,8 +329,8 @@ export default function CustosPage() {
         <div>
           <h1 className="text-xl font-bold text-[var(--text)]">Análise de custos</h1>
           <p className="text-xs text-[var(--text-muted)]">
-            Contas N4 de custo e despesa, da maior para a menor · abra a conta para ver o consolidado
-            por unidade → fornecedor ou seguir descendo até a folha
+            Contas N4 de custo e despesa, da maior para a menor · abra a conta até a folha
+            e destrinche por unidade → fornecedor
           </p>
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-2">
