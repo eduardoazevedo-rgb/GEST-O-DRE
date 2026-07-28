@@ -36,20 +36,19 @@ type No = { key: string; nome: string; codigo?: string; nivel: number; realizado
 // A partir do N4 a conta já é analisável por fornecedor mesmo tendo filhos.
 const NIVEL_DETALHE = 4;
 
-function filhosNormais(linhas: DreLinha[], codigoPai: string): No[] {
+// mostrarCodigo: no modo unificado as contas não têm um código único, então a
+// tela fica só com os nomes — inclusive nas que não foram agrupadas.
+function filhosNormais(linhas: DreLinha[], codigoPai: string, mostrarCodigo: boolean): No[] {
   return linhas
     .filter((l) => paiCod(l.codigo) === codigoPai)
-    .map((l) => ({
-      key: l.codigo, nome: l.nome, codigo: l.codigo, nivel: l.nivel, realizado: l.realizado,
-      filhos: l.temFilhos ? filhosNormais(linhas, l.codigo) : [],
-      codigosFonte: [l.codigo],
-    }));
+    .map((l) => noNormal(l, linhas, mostrarCodigo));
 }
 
-function noNormal(l: DreLinha, linhas: DreLinha[]): No {
+function noNormal(l: DreLinha, linhas: DreLinha[], mostrarCodigo: boolean): No {
   return {
-    key: l.codigo, nome: l.nome, codigo: l.codigo, nivel: l.nivel, realizado: l.realizado,
-    filhos: l.temFilhos ? filhosNormais(linhas, l.codigo) : [],
+    key: l.codigo, nome: l.nome, codigo: mostrarCodigo ? l.codigo : undefined,
+    nivel: l.nivel, realizado: l.realizado,
+    filhos: l.temFilhos ? filhosNormais(linhas, l.codigo, mostrarCodigo) : [],
     codigosFonte: [l.codigo],
   };
 }
@@ -96,9 +95,9 @@ function construirArvore(dre: DreResposta | null, unificar: boolean): No[] {
   const nos = unificar
     ? [
         ...unificarSufixadas(n4.filter((l) => temSufixo(l.nome)), linhas),
-        ...n4.filter((l) => !temSufixo(l.nome)).map((l) => noNormal(l, linhas)),
+        ...n4.filter((l) => !temSufixo(l.nome)).map((l) => noNormal(l, linhas, false)),
       ]
-    : n4.map((l) => noNormal(l, linhas));
+    : n4.map((l) => noNormal(l, linhas, true));
   return nos.sort((a, b) => soma(a.realizado) - soma(b.realizado));
 }
 
