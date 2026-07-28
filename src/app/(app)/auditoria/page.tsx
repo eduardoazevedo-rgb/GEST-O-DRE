@@ -218,8 +218,11 @@ export default function AuditoriaPage() {
                   {MESES_CURTO.map((m) => <th key={m} className="border-l border-white/20 px-2 py-1.5 text-right font-semibold">{m}</th>)}
                   <th className="border-l border-white/20 px-2 py-1.5 text-right font-semibold">Total</th>
                 </tr>
-                {/* Totalizador do que está filtrado, logo abaixo do cabeçalho. */}
-                <tr className="border-b-2 border-slate-300 bg-[var(--bg)] font-bold dark:border-slate-600">
+              </thead>
+              <tbody>{linhas}</tbody>
+              {/* Totalizador do que está filtrado, no pé da tabela. */}
+              <tfoot>
+                <tr className="border-t-2 border-slate-300 bg-[var(--bg)] font-bold dark:border-slate-600">
                   <td className="sticky left-0 z-10 bg-[var(--bg)] px-3 py-2 text-left uppercase tracking-wide text-[var(--text)]">
                     Total {metrica === "vl" ? "(R$)" : "(qtd)"}
                   </td>
@@ -230,8 +233,7 @@ export default function AuditoriaPage() {
                     {fmt(kpis.total)}
                   </td>
                 </tr>
-              </thead>
-              <tbody>{linhas}</tbody>
+              </tfoot>
             </table>
           </div>
 
