@@ -110,10 +110,10 @@ export default function AuditoriaPage() {
     const aberto = abertos.has(no.key);
     const arr = no[metrica];
     const t = soma(arr);
-    const bg = depth === 0 ? "bg-blue-50/60 dark:bg-blue-950/30 font-bold" : depth === 1 ? "font-semibold" : "";
+    const bg = depth === 0 ? "font-bold" : depth === 1 ? "font-semibold" : "";
     out.push(
       <tr key={no.key} className={cn("border-t border-[var(--border)] hover:bg-[var(--bg)]", bg)}>
-        <td className={cn("sticky left-0 z-10 whitespace-nowrap pr-3", depth === 0 ? "bg-blue-50 dark:bg-blue-950" : "bg-[var(--surface)]")}
+        <td className="sticky left-0 z-10 whitespace-nowrap pr-3 bg-[var(--surface)]"
           style={{ paddingLeft: `${12 + depth * 16}px` }}>
           <button onClick={() => no.filhos.length && alternar(no.key)}
             className={cn("flex items-center gap-1 py-1.5 text-left", no.filhos.length ? "cursor-pointer" : "cursor-default")}>
@@ -222,8 +222,8 @@ export default function AuditoriaPage() {
               <tbody>{linhas}</tbody>
               {/* Totalizador do que está filtrado, no pé da tabela. */}
               <tfoot>
-                <tr className="border-t-2 border-slate-300 bg-[var(--bg)] font-bold dark:border-slate-600">
-                  <td className="sticky left-0 z-10 bg-[var(--bg)] px-3 py-2 text-left uppercase tracking-wide text-[var(--text)]">
+                <tr className="border-t-2 border-slate-300 bg-[var(--surface)] font-bold dark:border-slate-600">
+                  <td className="sticky left-0 z-10 bg-[var(--surface)] px-3 py-2 text-left uppercase tracking-wide text-[var(--text)]">
                     Total {metrica === "vl" ? "(R$)" : "(qtd)"}
                   </td>
                   {porMes.map((p, i) => (
