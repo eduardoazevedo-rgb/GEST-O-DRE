@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { ChevronDown, ChevronRight, RefreshCw, Loader2 } from "lucide-react";
+import { ChevronDown, ChevronRight, RefreshCw, Loader2, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MESES_CURTO, formatNumero } from "@/lib/labels";
 import type { DreLinha, DreResposta } from "@/lib/types";
@@ -25,16 +25,20 @@ function stripSufixo(nome: string): string {
 }
 
 // Nó da árvore exibida. codigosFonte = código(s) gerencial(is) reais para o
-// drill de fornecedor (numa folha unificada há mais de um: VEN + ADM).
-type No = { key: string; nome: string; codigo?: string; realizado: number[]; filhos: No[]; codigosFonte: string[] };
+// drill de fornecedor (num nó unificado há mais de um: VEN + ADM). A RPC agrega
+// por prefixo, então num nó com filhos basta o próprio código.
+type No = { key: string; nome: string; codigo?: string; nivel: number; realizado: number[]; filhos: No[]; codigosFonte: string[] };
+
+// A partir do N4 a conta já é analisável por fornecedor mesmo tendo filhos.
+const NIVEL_DETALHE = 4;
 
 function filhosNormais(linhas: DreLinha[], codigoPai: string): No[] {
   return linhas
     .filter((l) => paiCod(l.codigo) === codigoPai)
     .map((l) => ({
-      key: l.codigo, nome: l.nome, codigo: l.codigo, realizado: l.realizado,
+      key: l.codigo, nome: l.nome, codigo: l.codigo, nivel: l.nivel, realizado: l.realizado,
       filhos: l.temFilhos ? filhosNormais(linhas, l.codigo) : [],
-      codigosFonte: l.temFilhos ? [] : [l.codigo],
+      codigosFonte: [l.codigo],
     }));
 }
 
@@ -57,14 +61,13 @@ function unificar34(linhas: DreLinha[]): No[] {
     }
     const filhos: No[] = [...gN5.entries()]
       .map(([bN5, ms]) => ({
-        key: `u|${base}|${bN5}`, nome: bN5, realizado: somaArrays(ms.map((m) => m.realizado)),
+        key: `u|${base}|${bN5}`, nome: bN5, nivel: 5, realizado: somaArrays(ms.map((m) => m.realizado)),
         filhos: [], codigosFonte: ms.map((m) => m.codigo),
       }))
       .sort((a, b) => soma(a.realizado) - soma(b.realizado));
-    const membrosFolha = membros.filter((m) => !m.temFilhos);
     nos.push({
-      key: `u|${base}`, nome: base, realizado: somaArrays(membros.map((m) => m.realizado)),
-      filhos, codigosFonte: filhos.length === 0 ? membrosFolha.map((m) => m.codigo) : [],
+      key: `u|${base}`, nome: base, nivel: 4, realizado: somaArrays(membros.map((m) => m.realizado)),
+      filhos, codigosFonte: membros.map((m) => m.codigo),
     });
   }
   return nos.sort((a, b) => soma(a.realizado) - soma(b.realizado));
@@ -76,9 +79,9 @@ function construirArvore(dre: DreResposta | null, unificar: boolean): No[] {
   const linhas = dre.linhas.filter((l) => l.codigo.startsWith("3") && l.codigo.split(".").slice(0, 2).join(".") !== "3.1");
   const n2 = linhas.filter((l) => l.nivel === 2);
   return n2.map((l) => ({
-    key: l.codigo, nome: l.nome, codigo: l.codigo, realizado: l.realizado,
+    key: l.codigo, nome: l.nome, codigo: l.codigo, nivel: l.nivel, realizado: l.realizado,
     filhos: l.codigo === "3.4" && unificar ? unificar34(linhas) : filhosNormais(linhas, l.codigo),
-    codigosFonte: l.temFilhos ? [] : [l.codigo],
+    codigosFonte: [l.codigo],
   }));
 }
 
@@ -123,6 +126,7 @@ export default function CustosPage() {
   const [erro, setErro] = useState("");
 
   const [abertos, setAbertos] = useState<Set<string>>(new Set());
+  const [abertosDet, setAbertosDet] = useState<Set<string>>(new Set());
   const [abertosUnidade, setAbertosUnidade] = useState<Set<string>>(new Set());
   const [detalhe, setDetalhe] = useState<Map<string, CustoFornecedorResposta>>(new Map());
   const [carregandoDet, setCarregandoDet] = useState<Set<string>>(new Set());
@@ -132,6 +136,7 @@ export default function CustosPage() {
     if (cache) { setDre(cache); setCarregando(false); } else setCarregando(true);
     setErro("");
     setDetalhe(new Map());
+    setAbertosDet(new Set());
     setAbertosUnidade(new Set());
     try {
       setDre(await buscarDre(ano));
@@ -161,11 +166,16 @@ export default function CustosPage() {
     }
   }, [ano]);
 
+  // Seta: abre os filhos; na folha, abre direto o detalhe por fornecedor.
   function alternarNo(no: No) {
-    const aberto = abertos.has(no.key);
-    setAbertos((prev) => { const n = new Set(prev); if (aberto) n.delete(no.key); else n.add(no.key); return n; });
-    const temDetalhe = no.filhos.length === 0 && no.codigosFonte.length > 0;
-    if (!aberto && temDetalhe && !detalhe.has(no.key)) buscarDetalhe(no.key, no.codigosFonte);
+    if (no.filhos.length === 0) { alternarDetalhe(no); return; }
+    setAbertos((prev) => { const n = new Set(prev); if (n.has(no.key)) n.delete(no.key); else n.add(no.key); return n; });
+  }
+  // Ícone de fornecedor: detalhe consolidado da conta (a RPC agrega por prefixo).
+  function alternarDetalhe(no: No) {
+    const aberto = abertosDet.has(no.key);
+    setAbertosDet((prev) => { const n = new Set(prev); if (aberto) n.delete(no.key); else n.add(no.key); return n; });
+    if (!aberto && !detalhe.has(no.key)) buscarDetalhe(no.key, no.codigosFonte);
   }
   function alternarUnidade(chave: string) {
     setAbertosUnidade((prev) => { const n = new Set(prev); if (n.has(chave)) n.delete(chave); else n.add(chave); return n; });
@@ -173,6 +183,7 @@ export default function CustosPage() {
   function alternarUnificar() {
     setUnificar((u) => !u);
     setAbertos(new Set());
+    setAbertosDet(new Set());
     setAbertosUnidade(new Set());
     setDetalhe(new Map());
   }
@@ -181,6 +192,7 @@ export default function CustosPage() {
     chave: string; depth: number; nome: string; codigoTag?: string; arr: number[];
     tipo: "n2" | "conta" | "unidade" | "fornecedor";
     expandivel?: boolean; aberto?: boolean; carregando?: boolean; onToggle?: () => void; zebra?: boolean;
+    onDetalhe?: () => void; detAberto?: boolean; carregandoDet?: boolean;
   }): ReactNode {
     const total = somaVis(opts.arr);
     const cel = "px-2 py-1.5 text-right tabular-nums whitespace-nowrap";
@@ -199,16 +211,30 @@ export default function CustosPage() {
       <tr key={opts.chave} className={cn(sep, peso, zebra && "bg-gray-50 dark:bg-neutral-800", "hover:bg-black/[0.02] dark:hover:bg-white/[0.03]")}>
         <td className={cn("sticky left-0 z-10 whitespace-nowrap pr-3", bgCel)}
           style={{ paddingLeft: `${12 + opts.depth * 16}px` }}>
-          <button onClick={opts.onToggle}
-            className={cn("flex items-center gap-1 py-1.5 text-left", opts.expandivel ? "cursor-pointer" : "cursor-default")}>
-            {opts.carregando ? <Loader2 size={13} className="animate-spin shrink-0" />
-              : opts.expandivel ? (opts.aberto ? <ChevronDown size={13} className="shrink-0" /> : <ChevronRight size={13} className="shrink-0" />)
-              : <span className="inline-block w-[13px] shrink-0" />}
-            <span className={cn(opts.tipo === "n2" && "uppercase tracking-wide", mudo && "text-[var(--text-muted)]")}>
-              {opts.codigoTag && <span className="text-[var(--text-muted)] mr-1">{opts.codigoTag}</span>}
-              {opts.nome}
-            </span>
-          </button>
+          <div className="flex items-center gap-1">
+            <button onClick={opts.onToggle}
+              className={cn("flex items-center gap-1 py-1.5 text-left", opts.expandivel ? "cursor-pointer" : "cursor-default")}>
+              {opts.carregando ? <Loader2 size={13} className="animate-spin shrink-0" />
+                : opts.expandivel ? (opts.aberto ? <ChevronDown size={13} className="shrink-0" /> : <ChevronRight size={13} className="shrink-0" />)
+                : <span className="inline-block w-[13px] shrink-0" />}
+              <span className={cn(opts.tipo === "n2" && "uppercase tracking-wide", mudo && "text-[var(--text-muted)]")}>
+                {opts.codigoTag && <span className="text-[var(--text-muted)] mr-1">{opts.codigoTag}</span>}
+                {opts.nome}
+              </span>
+            </button>
+            {opts.onDetalhe && (
+              <button onClick={opts.onDetalhe}
+                title={opts.detAberto ? "Ocultar unidades e fornecedores" : "Ver unidades e fornecedores desta conta"}
+                className={cn(
+                  "shrink-0 rounded p-1 transition-colors",
+                  opts.detAberto
+                    ? "bg-[var(--primary)] text-white"
+                    : "text-[var(--text-muted)] hover:bg-black/[0.06] hover:text-[var(--text)] dark:hover:bg-white/10"
+                )}>
+                {opts.carregandoDet ? <Loader2 size={12} className="animate-spin" /> : <Users size={12} />}
+              </button>
+            )}
+          </div>
         </td>
         {mesesVis.map((m) => {
           const v = opts.arr[m] ?? 0;
@@ -228,22 +254,31 @@ export default function CustosPage() {
   }
 
   function renderNo(no: No, depth: number, out: ReactNode[]) {
-    const aberto = abertos.has(no.key);
-    const temDetalhe = no.filhos.length === 0 && no.codigosFonte.length > 0;
-    const expandivel = no.filhos.length > 0 || temDetalhe;
+    const folha = no.filhos.length === 0;
+    // Folha abre o fornecedor pela própria seta; do N4 pra baixo, pelo ícone.
+    const detalhavel = no.codigosFonte.length > 0 && (folha || no.nivel >= NIVEL_DETALHE);
+    const detAberto = abertosDet.has(no.key);
+    const filhosAbertos = !folha && abertos.has(no.key);
+    const carregandoEste = carregandoDet.has(no.key);
+
     out.push(linhaMes({
       chave: `n-${no.key}`, depth, nome: no.nome,
       codigoTag: no.codigo ? `${no.codigo}.` : undefined,
       arr: no.realizado, tipo: depth === 0 ? "n2" : "conta",
-      expandivel, aberto, onToggle: () => alternarNo(no),
+      expandivel: !folha || detalhavel,
+      aberto: folha ? detAberto : filhosAbertos,
+      carregando: folha && carregandoEste,
+      onToggle: () => alternarNo(no),
+      onDetalhe: !folha && detalhavel ? () => alternarDetalhe(no) : undefined,
+      detAberto, carregandoDet: carregandoEste,
     }));
-    if (!aberto) return;
 
-    if (no.filhos.length > 0) {
-      for (const f of no.filhos) renderNo(f, depth + 1, out);
-      return;
-    }
-    // folha → detalhe por unidade → fornecedor
+    if (detalhavel && detAberto) renderDetalhe(no, depth, out);
+    if (filhosAbertos) for (const f of no.filhos) renderNo(f, depth + 1, out);
+  }
+
+  // Detalhe da conta: unidade → fornecedor, um nível abaixo da linha da conta.
+  function renderDetalhe(no: No, depth: number, out: ReactNode[]) {
     const padMsg = `${12 + (depth + 1) * 14 + 20}px`;
     const det = detalhe.get(no.key);
     if (carregandoDet.has(no.key) && !det) {
@@ -297,7 +332,8 @@ export default function CustosPage() {
         <div>
           <h1 className="text-xl font-bold text-[var(--text)]">Análise de custos</h1>
           <p className="text-xs text-[var(--text-muted)]">
-            Contas de custo e despesa, mês a mês · abra a conta até a folha e destrinche por unidade → fornecedor
+            Contas de custo e despesa, mês a mês · a partir do N4 o ícone <Users size={11} className="inline align-[-1px]" /> abre
+            unidade → fornecedor consolidado da conta; a seta segue detalhando até a folha
           </p>
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-2">
