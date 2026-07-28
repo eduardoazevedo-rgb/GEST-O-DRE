@@ -19,9 +19,13 @@ function paiCod(codigo: string): string | null {
   const i = codigo.lastIndexOf(".");
   return i > 0 ? codigo.slice(0, i) : null;
 }
-// Remove o sufixo de classificação (VEN)/(ADM)/(SERV) do fim do nome.
+// Sufixo de classificação (SERV)/(VEN)/(ADM) no fim do nome da conta.
+const RE_SUFIXO = /\s*\((?:VEN|ADM|SERV)\)\s*$/i;
 function stripSufixo(nome: string): string {
-  return nome.replace(/\s*\((?:VEN|ADM|SERV)\)\s*$/i, "").trim();
+  return nome.replace(RE_SUFIXO, "").trim();
+}
+function temSufixo(nome: string): boolean {
+  return RE_SUFIXO.test(nome);
 }
 
 // Nó da árvore exibida. codigosFonte = código(s) gerencial(is) reais para o
@@ -42,9 +46,18 @@ function filhosNormais(linhas: DreLinha[], codigoPai: string): No[] {
     }));
 }
 
-// Unifica o grupo 3.4: junta os ramos VEN (3.4.1) e ADM (3.4.2) por nome.
-function unificar34(linhas: DreLinha[]): No[] {
-  const n4 = linhas.filter((l) => l.nivel === 4 && (l.codigo.startsWith("3.4.1.") || l.codigo.startsWith("3.4.2.")));
+function noNormal(l: DreLinha, linhas: DreLinha[]): No {
+  return {
+    key: l.codigo, nome: l.nome, codigo: l.codigo, nivel: l.nivel, realizado: l.realizado,
+    filhos: l.temFilhos ? filhosNormais(linhas, l.codigo) : [],
+    codigosFonte: [l.codigo],
+  };
+}
+
+// Junta as contas N4 de mesma natureza pelo nome, ignorando o sufixo: PESSOAL
+// (SERV) + PESSOAL (VEN) + PESSOAL (ADM) viram uma linha só. O mesmo vale para
+// os N5 abaixo delas (SALARIOS (SERV) + SALARIOS (VEN) + ...).
+function unificarSufixadas(n4: DreLinha[], linhas: DreLinha[]): No[] {
   const grupos = new Map<string, DreLinha[]>();
   for (const l of n4) {
     const b = stripSufixo(l.nome);
@@ -70,19 +83,23 @@ function unificar34(linhas: DreLinha[]): No[] {
       filhos, codigosFonte: membros.map((m) => m.codigo),
     });
   }
-  return nos.sort((a, b) => soma(a.realizado) - soma(b.realizado));
+  return nos;
 }
 
+// O relatório começa no N4: sem as linhas de grupo N2/N3, uma conta por linha,
+// da maior despesa para a menor.
 function construirArvore(dre: DreResposta | null, unificar: boolean): No[] {
   if (!dre) return [];
   // classe 3, fora Receita (3.1)
   const linhas = dre.linhas.filter((l) => l.codigo.startsWith("3") && l.codigo.split(".").slice(0, 2).join(".") !== "3.1");
-  const n2 = linhas.filter((l) => l.nivel === 2);
-  return n2.map((l) => ({
-    key: l.codigo, nome: l.nome, codigo: l.codigo, nivel: l.nivel, realizado: l.realizado,
-    filhos: l.codigo === "3.4" && unificar ? unificar34(linhas) : filhosNormais(linhas, l.codigo),
-    codigosFonte: [l.codigo],
-  }));
+  const n4 = linhas.filter((l) => l.nivel === 4);
+  const nos = unificar
+    ? [
+        ...unificarSufixadas(n4.filter((l) => temSufixo(l.nome)), linhas),
+        ...n4.filter((l) => !temSufixo(l.nome)).map((l) => noNormal(l, linhas)),
+      ]
+    : n4.map((l) => noNormal(l, linhas));
+  return nos.sort((a, b) => soma(a.realizado) - soma(b.realizado));
 }
 
 // Junta o detalhe (unidade × fornecedor) de vários códigos numa resposta só.
@@ -190,18 +207,19 @@ export default function CustosPage() {
 
   function linhaMes(opts: {
     chave: string; depth: number; nome: string; codigoTag?: string; arr: number[];
-    tipo: "n2" | "conta" | "unidade" | "fornecedor";
+    tipo: "conta" | "unidade" | "fornecedor";
     expandivel?: boolean; aberto?: boolean; carregando?: boolean; onToggle?: () => void; zebra?: boolean;
     onDetalhe?: () => void; detAberto?: boolean; carregandoDet?: boolean;
   }): ReactNode {
     const total = somaVis(opts.arr);
     const cel = "px-2 py-1.5 text-right tabular-nums whitespace-nowrap";
     const mudo = opts.tipo === "fornecedor";
-    // Negrito dinâmico: grupos N2 sempre; demais só quando expandidos.
-    const negrito = opts.tipo === "n2" || !!opts.aberto;
+    const contaRaiz = opts.tipo === "conta" && opts.depth === 0;
+    // Negrito dinâmico: as contas N4 (raiz do relatório) sempre; demais só quando expandidas.
+    const negrito = contaRaiz || !!opts.aberto;
     const peso = negrito ? "font-bold" : opts.tipo === "unidade" ? "font-medium" : "font-normal";
-    // Separador de bloco no topo dos grupos; linha fina no resto.
-    const sep = opts.tipo === "n2" ? "border-t-2 border-slate-300 dark:border-slate-600" : "border-t border-[var(--border)]";
+    // Separador mais marcado entre as contas N4; linha fina no detalhe.
+    const sep = contaRaiz ? "border-t-2 border-slate-300 dark:border-slate-600" : "border-t border-[var(--border)]";
     // Zebra neutra só no fornecedor (cor sólida p/ a célula fixa cobrir o scroll).
     const zebra = opts.tipo === "fornecedor" && opts.zebra;
     const bgCel = zebra ? "bg-gray-50 dark:bg-neutral-800" : "bg-[var(--surface)]";
@@ -217,7 +235,7 @@ export default function CustosPage() {
               {opts.carregando ? <Loader2 size={13} className="animate-spin shrink-0" />
                 : opts.expandivel ? (opts.aberto ? <ChevronDown size={13} className="shrink-0" /> : <ChevronRight size={13} className="shrink-0" />)
                 : <span className="inline-block w-[13px] shrink-0" />}
-              <span className={cn(opts.tipo === "n2" && "uppercase tracking-wide", mudo && "text-[var(--text-muted)]")}>
+              <span className={cn(mudo && "text-[var(--text-muted)]")}>
                 {opts.codigoTag && <span className="text-[var(--text-muted)] mr-1">{opts.codigoTag}</span>}
                 {opts.nome}
               </span>
@@ -264,7 +282,7 @@ export default function CustosPage() {
     out.push(linhaMes({
       chave: `n-${no.key}`, depth, nome: no.nome,
       codigoTag: no.codigo ? `${no.codigo}.` : undefined,
-      arr: no.realizado, tipo: depth === 0 ? "n2" : "conta",
+      arr: no.realizado, tipo: "conta",
       expandivel: !folha || detalhavel,
       aberto: folha ? detAberto : filhosAbertos,
       carregando: folha && carregandoEste,
@@ -332,14 +350,14 @@ export default function CustosPage() {
         <div>
           <h1 className="text-xl font-bold text-[var(--text)]">Análise de custos</h1>
           <p className="text-xs text-[var(--text-muted)]">
-            Contas de custo e despesa, mês a mês · a partir do N4 o ícone <Users size={11} className="inline align-[-1px]" /> abre
-            unidade → fornecedor consolidado da conta; a seta segue detalhando até a folha
+            Contas N4 de custo e despesa, da maior para a menor · o ícone <Users size={11} className="inline align-[-1px]" /> abre
+            unidade → fornecedor consolidado da conta; a seta detalha até a folha
           </p>
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <button
             onClick={alternarUnificar}
-            title="Junta as despesas (VEN) e (ADM) por tipo"
+            title="Junta as contas (SERV), (VEN) e (ADM) de mesmo nome numa linha só"
             className={cn(
               "rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors",
               unificar
@@ -347,7 +365,7 @@ export default function CustosPage() {
                 : "border-[var(--border)] bg-[var(--surface)] text-[var(--text-muted)] hover:text-[var(--text)]"
             )}
           >
-            Unificar VEN/ADM {unificar ? "•" : ""}
+            Unificar SERV/VEN/ADM {unificar ? "•" : ""}
           </button>
           <SeletorMeses sel={mesesSel} onChange={setMesesSel} />
           <select value={ano} onChange={(e) => setAno(Number(e.target.value))}
