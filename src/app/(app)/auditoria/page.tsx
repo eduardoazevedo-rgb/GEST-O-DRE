@@ -52,7 +52,8 @@ export default function AuditoriaPage() {
   }, [supabase, ano]);
   useEffect(() => { carregar(); }, [carregar]);
 
-  const filialNome = (cd: number | null) => (cd == null ? "—" : `${cd} · ${filiais.get(cd) ?? ""}`.trim());
+  // Só o nome: o código já sai na frente, na coluna, como tag.
+  const filialNome = (cd: number | null) => (cd == null ? "—" : filiais.get(cd) ?? `Unidade ${cd}`);
   const val = (n: No) => n[metrica];
 
   const unidades = useMemo(() => [...new Set(dados.map((d) => d.cd_empresa).filter((v): v is number => v != null))].sort((a, b) => a - b), [dados]);
