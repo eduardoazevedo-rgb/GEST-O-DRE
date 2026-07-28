@@ -52,6 +52,16 @@ export async function GET(req: NextRequest) {
   if (!Number.isInteger(ano) || ano < 2000 || ano > 2099) {
     return NextResponse.json({ error: "Ano inválido" }, { status: 400 });
   }
+  // Filtro opcional por unidade (usado pela Análise de custos). Como o orçamento
+  // não tem dimensão de unidade, com o filtro ligado só o realizado faz sentido.
+  const unidadeParam = searchParams.get("unidade");
+  let unidade: number | null = null;
+  if (unidadeParam !== null && unidadeParam !== "") {
+    unidade = Number(unidadeParam);
+    if (!Number.isInteger(unidade)) {
+      return NextResponse.json({ error: "Unidade inválida" }, { status: 400 });
+    }
+  }
 
   let planoData: { codigo: string; nome: string; nivel: number; natureza: number; exibir_dre: boolean }[];
   let deParaData: { cd_classificacao_erp: string; codigo_gerencial: string }[];
@@ -76,7 +86,9 @@ export async function GET(req: NextRequest) {
           .order("cd_classificacao_erp")
           .range(de, ate)
       ),
-      supabase.rpc("dre_realizado_pivot", { p_empresa: EMPRESA_ID, p_ano: ano }),
+      unidade === null
+        ? supabase.rpc("dre_realizado_pivot", { p_empresa: EMPRESA_ID, p_ano: ano })
+        : supabase.rpc("dre_realizado_pivot_unidade", { p_empresa: EMPRESA_ID, p_ano: ano, p_filial: unidade }),
     ]);
     if (realizadoRes.error) throw new Error(realizadoRes.error.message);
     planoData = planoTmp;
@@ -89,7 +101,10 @@ export async function GET(req: NextRequest) {
   // Versão do orçamento: a informada, ou a ativa mais recente do ano
   let versaoId: string | null = null;
   let versaoNome: string | null = null;
-  if (versaoParam) {
+  if (unidade !== null) {
+    // Sem orçamento por unidade: o planejado fica zerado em vez de repetir o
+    // valor da empresa inteira ao lado do realizado de uma filial só.
+  } else if (versaoParam) {
     versaoId = versaoParam;
     const { data } = await supabase.from("orcamento_versoes").select("nome").eq("id", versaoParam).single();
     versaoNome = data?.nome ?? null;

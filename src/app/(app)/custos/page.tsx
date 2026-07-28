@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { ChevronDown, ChevronRight, RefreshCw, Loader2 } from "lucide-react";
+import { ChevronDown, ChevronRight, RefreshCw, Loader2, Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MESES_CURTO, formatNumero } from "@/lib/labels";
 import type { DreLinha, DreResposta } from "@/lib/types";
@@ -98,6 +98,30 @@ function construirArvore(dre: DreResposta | null, unificar: boolean): No[] {
   return nos.sort((a, b) => soma(a.realizado) - soma(b.realizado));
 }
 
+// Busca sem acento e sem caixa: "manutencao" acha "MANUTENÇÃO".
+function normalizar(s: string): string {
+  return s.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
+}
+
+// Filtro do campo de busca: mantém a conta que casa (com o conteúdo dela) e os
+// ancestrais de quem casa mais fundo — esses vão abertos (forcados) para o
+// resultado aparecer sem precisar clicar.
+function filtrarArvore(nos: No[], termo: string): { nos: No[]; forcados: Set<string> } {
+  const t = normalizar(termo.trim());
+  const forcados = new Set<string>();
+  if (!t) return { nos, forcados };
+  const filtra = (lista: No[]): No[] => {
+    const out: No[] = [];
+    for (const no of lista) {
+      if (normalizar(`${no.codigo ?? ""} ${no.nome}`).includes(t)) { out.push(no); continue; }
+      const filhos = filtra(no.filhos);
+      if (filhos.length > 0) { forcados.add(no.key); out.push({ ...no, filhos }); }
+    }
+    return out;
+  };
+  return { nos: filtra(nos), forcados };
+}
+
 // Junta o detalhe (unidade × fornecedor) de vários códigos numa resposta só.
 function mergeDetalhes(rs: CustoFornecedorResposta[]): CustoFornecedorResposta {
   const uni = new Map<number, { nome: string; valor: number[]; forn: Map<string, { cd_pessoa: number | null; nome: string; valor: number[] }> }>();
@@ -128,6 +152,9 @@ export default function CustosPage() {
   const [ano, setAno] = useState(anoAtual);
   const [mesesSel, setMesesSel] = useState<number[]>([]); // vazio = ano todo
   const [unificar, setUnificar] = useState(true);
+  const [unidade, setUnidade] = useState<number | null>(null); // null = todas
+  const [unidades, setUnidades] = useState<{ cd: number; nome: string }[]>([]);
+  const [busca, setBusca] = useState("");
 
   // Meses exibidos: nenhum marcado = ano todo (12). Total quando há mais de um.
   const mesesVis = mesesSel.length === 0 ? [...Array(12).keys()] : [...mesesSel].sort((a, b) => a - b);
@@ -145,24 +172,38 @@ export default function CustosPage() {
   const [carregandoDet, setCarregandoDet] = useState<Set<string>>(new Set());
 
   const carregar = useCallback(async () => {
-    const cache = dreEmCache(ano);
+    const cache = dreEmCache(ano, unidade);
     if (cache) { setDre(cache); setCarregando(false); } else setCarregando(true);
     setErro("");
     setDetalhe(new Map());
     setAbertosDet(new Set());
     setAbertosUnidade(new Set());
     try {
-      setDre(await buscarDre(ano));
+      setDre(await buscarDre(ano, unidade));
     } catch (e) {
       setErro(e instanceof Error ? e.message : String(e));
     } finally {
       setCarregando(false);
     }
-  }, [ano]);
+  }, [ano, unidade]);
 
   useEffect(() => { carregar(); }, [carregar]);
 
-  const arvore = useMemo(() => construirArvore(dre, unificar), [dre, unificar]);
+  // Unidades que o usuário enxerga, para o seletor.
+  useEffect(() => {
+    let vivo = true;
+    fetch(`/api/executivo/unidades?ano=${ano}`)
+      .then((r) => (r.ok ? r.json() : { unidades: [] }))
+      .then((j: { unidades?: { cd_empresa_erp: number; nome: string }[] }) => {
+        if (!vivo) return;
+        setUnidades((j.unidades ?? []).map((u) => ({ cd: u.cd_empresa_erp, nome: u.nome })));
+      })
+      .catch(() => { /* seletor fica só com "Todas" */ });
+    return () => { vivo = false; };
+  }, [ano]);
+
+  const arvoreCompleta = useMemo(() => construirArvore(dre, unificar), [dre, unificar]);
+  const { nos: arvore, forcados } = useMemo(() => filtrarArvore(arvoreCompleta, busca), [arvoreCompleta, busca]);
 
   const buscarDetalhe = useCallback(async (key: string, codigos: string[]) => {
     setCarregandoDet((s) => new Set(s).add(key));
@@ -257,7 +298,7 @@ export default function CustosPage() {
     // O detalhe por unidade → fornecedor sai na folha, pela própria seta.
     const detalhavel = folha && no.codigosFonte.length > 0;
     const detAberto = abertosDet.has(no.key);
-    const filhosAbertos = !folha && abertos.has(no.key);
+    const filhosAbertos = !folha && (abertos.has(no.key) || forcados.has(no.key));
     const carregandoEste = carregandoDet.has(no.key);
 
     out.push(linhaMes({
@@ -277,7 +318,11 @@ export default function CustosPage() {
   // Detalhe da conta: unidade → fornecedor, um nível abaixo da linha da conta.
   function renderDetalhe(no: No, depth: number, out: ReactNode[]) {
     const padMsg = `${12 + (depth + 1) * 14 + 20}px`;
-    const det = detalhe.get(no.key);
+    const bruto = detalhe.get(no.key);
+    // Com uma unidade selecionada, o detalhe mostra só ela.
+    const det = bruto && unidade !== null
+      ? { ...bruto, unidades: bruto.unidades.filter((u) => u.cd_empresa_erp === unidade) }
+      : bruto;
     if (carregandoDet.has(no.key) && !det) {
       out.push(
         <tr key={`load-${no.key}`} className="border-t border-[var(--border)]">
@@ -334,6 +379,35 @@ export default function CustosPage() {
           </p>
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-2">
+          <div className="relative">
+            <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" />
+            <input
+              value={busca}
+              onChange={(e) => setBusca(e.target.value)}
+              placeholder="Buscar conta (ex.: manutenção)"
+              className="w-56 rounded-lg border border-[var(--border)] bg-[var(--surface)] py-1.5 pl-8 pr-7 text-sm text-[var(--text)] placeholder:text-[var(--text-muted)]"
+            />
+            {busca && (
+              <button onClick={() => setBusca("")} title="Limpar busca"
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-[var(--text-muted)] hover:text-[var(--text)]">
+                <X size={13} />
+              </button>
+            )}
+          </div>
+          <select
+            value={unidade ?? ""}
+            onChange={(e) => setUnidade(e.target.value === "" ? null : Number(e.target.value))}
+            title="Filtrar por unidade"
+            className={cn(
+              "max-w-56 rounded-lg border px-3 py-1.5 text-sm",
+              unidade === null
+                ? "border-[var(--border)] bg-[var(--surface)] text-[var(--text)]"
+                : "border-[var(--primary)] bg-[var(--surface)] font-medium text-[var(--text)]"
+            )}
+          >
+            <option value="">Todas as unidades</option>
+            {unidades.map((u) => <option key={u.cd} value={u.cd}>{u.cd} · {u.nome}</option>)}
+          </select>
           <button
             onClick={alternarUnificar}
             title="Junta as contas (SERV), (VEN) e (ADM) de mesmo nome numa linha só"
@@ -376,6 +450,10 @@ export default function CustosPage() {
           <tbody>
             {carregando
               ? <tr><td colSpan={nCols} className="px-3 py-8 text-center text-[var(--text-muted)]">Carregando…</td></tr>
+              : arvore.length === 0
+              ? <tr><td colSpan={nCols} className="px-3 py-8 text-center text-[var(--text-muted)]">
+                  {busca ? `Nenhuma conta com “${busca}”.` : "Sem lançamentos para o filtro escolhido."}
+                </td></tr>
               : renderLinhas()}
           </tbody>
         </table>
