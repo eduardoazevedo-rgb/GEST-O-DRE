@@ -31,7 +31,24 @@ function temSufixo(nome: string): boolean {
 // Nó da árvore exibida. codigosFonte = código(s) gerencial(is) reais para o
 // drill de fornecedor (num nó unificado há mais de um: VEN + ADM). A RPC agrega
 // por prefixo, então num nó com filhos basta o próprio código.
-type No = { key: string; nome: string; codigo?: string; nivel: number; realizado: number[]; filhos: No[]; codigosFonte: string[] };
+type No = {
+  key: string; nome: string; codigo?: string; nivel: number;
+  realizado: number[]; planejado: number[]; filhos: No[]; codigosFonte: string[];
+};
+
+// O que a grade mostra. Desvio = realizado − planejado (positivo = gastou menos
+// que o previsto, seguindo a convenção de sinais do ERP).
+type Modo = "realizado" | "planejado" | "desvio";
+const MODOS: { valor: Modo; rotulo: string }[] = [
+  { valor: "realizado", rotulo: "Realizado" },
+  { valor: "planejado", rotulo: "Planejado" },
+  { valor: "desvio", rotulo: "Desvio" },
+];
+function valoresDoModo(no: No, modo: Modo): number[] {
+  if (modo === "realizado") return no.realizado;
+  if (modo === "planejado") return no.planejado;
+  return no.realizado.map((v, m) => v - (no.planejado[m] ?? 0));
+}
 
 // mostrarCodigo: no modo unificado as contas não têm um código único, então a
 // tela fica só com os nomes — inclusive nas que não foram agrupadas.
@@ -44,7 +61,7 @@ function filhosNormais(linhas: DreLinha[], codigoPai: string, mostrarCodigo: boo
 function noNormal(l: DreLinha, linhas: DreLinha[], mostrarCodigo: boolean): No {
   return {
     key: l.codigo, nome: l.nome, codigo: mostrarCodigo ? l.codigo : undefined,
-    nivel: l.nivel, realizado: l.realizado,
+    nivel: l.nivel, realizado: l.realizado, planejado: l.planejado,
     filhos: l.temFilhos ? filhosNormais(linhas, l.codigo, mostrarCodigo) : [],
     codigosFonte: [l.codigo],
   };
@@ -53,7 +70,7 @@ function noNormal(l: DreLinha, linhas: DreLinha[], mostrarCodigo: boolean): No {
 // Junta as contas N4 de mesma natureza pelo nome, ignorando o sufixo: PESSOAL
 // (SERV) + PESSOAL (VEN) + PESSOAL (ADM) viram uma linha só. O mesmo vale para
 // os N5 abaixo delas (SALARIOS (SERV) + SALARIOS (VEN) + ...).
-function unificarSufixadas(n4: DreLinha[], linhas: DreLinha[]): No[] {
+function unificarSufixadas(n4: DreLinha[], linhas: DreLinha[], campoOrdem: "realizado" | "planejado"): No[] {
   const grupos = new Map<string, DreLinha[]>();
   for (const l of n4) {
     const b = stripSufixo(l.nome);
@@ -70,12 +87,16 @@ function unificarSufixadas(n4: DreLinha[], linhas: DreLinha[]): No[] {
     }
     const filhos: No[] = [...gN5.entries()]
       .map(([bN5, ms]) => ({
-        key: `u|${base}|${bN5}`, nome: bN5, nivel: 5, realizado: somaArrays(ms.map((m) => m.realizado)),
+        key: `u|${base}|${bN5}`, nome: bN5, nivel: 5,
+        realizado: somaArrays(ms.map((m) => m.realizado)),
+        planejado: somaArrays(ms.map((m) => m.planejado)),
         filhos: [], codigosFonte: ms.map((m) => m.codigo),
       }))
-      .sort((a, b) => soma(a.realizado) - soma(b.realizado));
+      .sort((a, b) => soma(a[campoOrdem]) - soma(b[campoOrdem]));
     nos.push({
-      key: `u|${base}`, nome: base, nivel: 4, realizado: somaArrays(membros.map((m) => m.realizado)),
+      key: `u|${base}`, nome: base, nivel: 4,
+      realizado: somaArrays(membros.map((m) => m.realizado)),
+      planejado: somaArrays(membros.map((m) => m.planejado)),
       filhos, codigosFonte: membros.map((m) => m.codigo),
     });
   }
@@ -84,18 +105,20 @@ function unificarSufixadas(n4: DreLinha[], linhas: DreLinha[]): No[] {
 
 // O relatório começa no N4: sem as linhas de grupo N2/N3, uma conta por linha,
 // da maior despesa para a menor.
-function construirArvore(dre: DreResposta | null, unificar: boolean): No[] {
+function construirArvore(dre: DreResposta | null, unificar: boolean, modo: Modo): No[] {
   if (!dre) return [];
   // classe 3, fora Receita (3.1)
   const linhas = dre.linhas.filter((l) => l.codigo.startsWith("3") && l.codigo.split(".").slice(0, 2).join(".") !== "3.1");
   const n4 = linhas.filter((l) => l.nivel === 4);
+  // No modo Planejado a ordem segue o orçado; nos demais, o realizado.
+  const campoOrdem = modo === "planejado" ? "planejado" : "realizado";
   const nos = unificar
     ? [
-        ...unificarSufixadas(n4.filter((l) => temSufixo(l.nome)), linhas),
+        ...unificarSufixadas(n4.filter((l) => temSufixo(l.nome)), linhas, campoOrdem),
         ...n4.filter((l) => !temSufixo(l.nome)).map((l) => noNormal(l, linhas, false)),
       ]
     : n4.map((l) => noNormal(l, linhas, true));
-  return nos.sort((a, b) => soma(a.realizado) - soma(b.realizado));
+  return nos.sort((a, b) => soma(a[campoOrdem]) - soma(b[campoOrdem]));
 }
 
 // Busca sem acento e sem caixa: "manutencao" acha "MANUTENÇÃO".
@@ -155,6 +178,11 @@ export default function CustosPage() {
   const [unidade, setUnidade] = useState<number | null>(null); // null = todas
   const [unidades, setUnidades] = useState<{ cd: number; nome: string }[]>([]);
   const [busca, setBusca] = useState("");
+  const [modoSel, setModoSel] = useState<Modo>("realizado");
+  // O orçamento não tem quebra por unidade: com uma filial escolhida só o
+  // realizado faz sentido, então a grade volta pra ele.
+  const semOrcamento = unidade !== null;
+  const modo: Modo = semOrcamento ? "realizado" : modoSel;
 
   // Meses exibidos: nenhum marcado = ano todo (12). Total quando há mais de um.
   const mesesVis = mesesSel.length === 0 ? [...Array(12).keys()] : [...mesesSel].sort((a, b) => a - b);
@@ -202,7 +230,7 @@ export default function CustosPage() {
     return () => { vivo = false; };
   }, [ano]);
 
-  const arvoreCompleta = useMemo(() => construirArvore(dre, unificar), [dre, unificar]);
+  const arvoreCompleta = useMemo(() => construirArvore(dre, unificar, modo), [dre, unificar, modo]);
   const { nos: arvore, forcados } = useMemo(() => filtrarArvore(arvoreCompleta, busca), [arvoreCompleta, busca]);
 
   const buscarDetalhe = useCallback(async (key: string, codigos: string[]) => {
@@ -246,6 +274,8 @@ export default function CustosPage() {
     chave: string; depth: number; nome: string; codigoTag?: string; arr: number[];
     tipo: "conta" | "unidade" | "fornecedor";
     expandivel?: boolean; aberto?: boolean; carregando?: boolean; onToggle?: () => void; zebra?: boolean;
+    // Desvio pinta os dois lados: verde = gastou menos que o previsto.
+    corDesvio?: boolean;
   }): ReactNode {
     const total = somaVis(opts.arr);
     const cel = "px-2 py-1.5 text-right tabular-nums whitespace-nowrap";
@@ -260,7 +290,9 @@ export default function CustosPage() {
     const zebra = opts.tipo === "fornecedor" && opts.zebra;
     const bgCel = zebra ? "bg-gray-50 dark:bg-neutral-800" : "bg-[var(--surface)]";
     const corValor = (v: number) =>
-      v > 0 ? "text-emerald-600 dark:text-emerald-400" : mudo ? "text-[var(--text-muted)]" : "text-[var(--text)]";
+      v > 0 ? "text-emerald-600 dark:text-emerald-400"
+        : opts.corDesvio ? "text-red-600 dark:text-red-400"
+        : mudo ? "text-[var(--text-muted)]" : "text-[var(--text)]";
     return (
       <tr key={opts.chave} className={cn(sep, peso, zebra && "bg-gray-50 dark:bg-neutral-800", "hover:bg-black/[0.02] dark:hover:bg-white/[0.03]")}>
         <td className={cn("sticky left-0 z-10 whitespace-nowrap pr-3", bgCel)}
@@ -285,7 +317,7 @@ export default function CustosPage() {
           );
         })}
         {mostrarTotal && (
-          <td className={cn(cel, "border-l border-[var(--border)] font-bold", total > 0 && "text-emerald-600 dark:text-emerald-400")}>
+          <td className={cn(cel, "border-l border-[var(--border)] font-bold", total !== 0 && corValor(total))}>
             {formatNumero(total)}
           </td>
         )}
@@ -304,7 +336,7 @@ export default function CustosPage() {
     out.push(linhaMes({
       chave: `n-${no.key}`, depth, nome: no.nome,
       codigoTag: no.codigo ? `${no.codigo}.` : undefined,
-      arr: no.realizado, tipo: "conta",
+      arr: valoresDoModo(no, modo), tipo: "conta", corDesvio: modo === "desvio",
       expandivel: !folha || detalhavel,
       aberto: folha ? detAberto : filhosAbertos,
       carregando: folha && carregandoEste,
@@ -344,7 +376,9 @@ export default function CustosPage() {
         const chaveU = `${no.key}|${u.cd_empresa_erp}`;
         const uAberto = abertosUnidade.has(chaveU);
         out.push(linhaMes({
-          chave: `u-${chaveU}`, depth: depth + 1, nome: u.nome, codigoTag: String(u.cd_empresa_erp),
+          // Fornecedor só existe no realizado — nos outros modos o rótulo avisa.
+          chave: `u-${chaveU}`, depth: depth + 1, codigoTag: String(u.cd_empresa_erp),
+          nome: modo === "realizado" ? u.nome : `${u.nome} (realizado)`,
           arr: u.valor, tipo: "unidade", expandivel: true, aberto: uAberto, onToggle: () => alternarUnidade(chaveU),
         }));
         if (uAberto) {
@@ -376,9 +410,26 @@ export default function CustosPage() {
           <p className="text-xs text-[var(--text-muted)]">
             Contas N4 de custo e despesa, da maior para a menor · abra a conta até a folha
             e destrinche por unidade → fornecedor
+            {modo !== "realizado" && (
+              <> · orçamento: {dre?.versaoNome ?? "nenhuma versão ativa no ano"}</>
+            )}
           </p>
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-2">
+          <div className="flex rounded-lg border border-[var(--border)] bg-[var(--surface)] p-0.5">
+            {MODOS.map((m) => (
+              <button key={m.valor} onClick={() => setModoSel(m.valor)}
+                disabled={semOrcamento && m.valor !== "realizado"}
+                title={semOrcamento && m.valor !== "realizado"
+                  ? "O orçamento não tem quebra por unidade — disponível só com “Todas as unidades”"
+                  : m.valor === "desvio" ? "Realizado − planejado (verde = gastou menos que o previsto)" : undefined}
+                className={cn("rounded-md px-3 py-1 text-xs font-semibold transition-colors",
+                  modo === m.valor ? "bg-[var(--primary)] text-white" : "text-[var(--text-muted)] hover:text-[var(--text)]",
+                  semOrcamento && m.valor !== "realizado" && "cursor-not-allowed opacity-40 hover:text-[var(--text-muted)]")}>
+                {m.rotulo}
+              </button>
+            ))}
+          </div>
           <div className="relative">
             <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" />
             <input
