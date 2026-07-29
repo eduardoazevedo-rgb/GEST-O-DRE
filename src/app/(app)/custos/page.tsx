@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, RefreshCw, Loader2, Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { MESES_CURTO, formatNumero } from "@/lib/labels";
+import { MESES_CURTO, formatNumero, formatPct } from "@/lib/labels";
 import type { DreLinha, DreResposta } from "@/lib/types";
 import { buscarDre, dreEmCache } from "@/lib/dre-fetch";
 import SeletorMeses from "@/components/SeletorMeses";
@@ -38,16 +38,54 @@ type No = {
 
 // O que a grade mostra. Desvio = realizado − planejado (positivo = gastou menos
 // que o previsto, seguindo a convenção de sinais do ERP).
-type Modo = "realizado" | "planejado" | "desvio";
+type Modo = "comparativo" | "realizado" | "planejado" | "desvio";
 const MODOS: { valor: Modo; rotulo: string }[] = [
+  { valor: "comparativo", rotulo: "Planejado vs Realizado" },
   { valor: "realizado", rotulo: "Realizado" },
   { valor: "planejado", rotulo: "Planejado" },
   { valor: "desvio", rotulo: "Desvio" },
 ];
+
+function desvioPct(realizado: number, planejado: number): number | null {
+  if (planejado === 0) return null;
+  return ((realizado - planejado) / Math.abs(planejado)) * 100;
+}
+
+// Trio Plan./Real./Desv. de um mês (ou do total) no modo comparativo.
+function blocoComparativo(p: number, r: number, chave: string, cel: string, mudo: boolean): ReactNode {
+  const d = desvioPct(r, p);
+  const vazio = <span className="text-[var(--text-muted)]/40">–</span>;
+  return (
+    <Fragment key={chave}>
+      <td className={cn(cel, "border-l border-[var(--border)] text-[var(--text-muted)]")}>
+        {p !== 0 ? formatNumero(p) : vazio}
+      </td>
+      <td className={cn(cel, r > 0 && "text-emerald-600 dark:text-emerald-400", mudo && "text-[var(--text-muted)]")}>
+        {r !== 0 ? formatNumero(r) : vazio}
+      </td>
+      <td className={cn(cel, "pr-3",
+        d !== null && d >= 0 && "text-emerald-600 dark:text-emerald-400",
+        d !== null && d < 0 && "text-red-600 dark:text-red-400")}>
+        {d !== null ? formatPct(d) : vazio}
+      </td>
+    </Fragment>
+  );
+}
+
+// Cabeçalho de baixo do modo comparativo: as três colunas de cada mês.
+function MiniCabecalho() {
+  return (
+    <>
+      <th className="border-l border-white/20 px-2 py-1 text-right font-normal">Plan.</th>
+      <th className="px-2 py-1 text-right font-normal">Real.</th>
+      <th className="px-2 py-1 pr-3 text-right font-normal">Desv.</th>
+    </>
+  );
+}
 function valoresDoModo(no: No, modo: Modo): number[] {
-  if (modo === "realizado") return no.realizado;
   if (modo === "planejado") return no.planejado;
-  return no.realizado.map((v, m) => v - (no.planejado[m] ?? 0));
+  if (modo === "desvio") return no.realizado.map((v, m) => v - (no.planejado[m] ?? 0));
+  return no.realizado; // realizado e comparativo (neste, o plan. vai à parte)
 }
 
 // mostrarCodigo: no modo unificado as contas não têm um código único, então a
@@ -178,16 +216,19 @@ export default function CustosPage() {
   const [unidade, setUnidade] = useState<number | null>(null); // null = todas
   const [unidades, setUnidades] = useState<{ cd: number; nome: string }[]>([]);
   const [busca, setBusca] = useState("");
-  const [modoSel, setModoSel] = useState<Modo>("realizado");
+  const [modoSel, setModoSel] = useState<Modo>("comparativo");
   // O orçamento não tem quebra por unidade: com uma filial escolhida só o
   // realizado faz sentido, então a grade volta pra ele.
   const semOrcamento = unidade !== null;
   const modo: Modo = semOrcamento ? "realizado" : modoSel;
+  // No comparativo cada mês ocupa 3 colunas (Plan./Real./Desv.).
+  const comparativo = modo === "comparativo";
+  const porMesCols = comparativo ? 3 : 1;
 
   // Meses exibidos: nenhum marcado = ano todo (12). Total quando há mais de um.
   const mesesVis = mesesSel.length === 0 ? [...Array(12).keys()] : [...mesesSel].sort((a, b) => a - b);
   const mostrarTotal = mesesVis.length > 1;
-  const nCols = 1 + mesesVis.length + (mostrarTotal ? 1 : 0);
+  const nCols = 1 + mesesVis.length * porMesCols + (mostrarTotal ? porMesCols : 0);
   const somaVis = (arr: number[]) => mesesVis.reduce((a, m) => a + (arr[m] ?? 0), 0);
   const [dre, setDre] = useState<DreResposta | null>(null);
   const [carregando, setCarregando] = useState(true);
@@ -276,6 +317,8 @@ export default function CustosPage() {
     expandivel?: boolean; aberto?: boolean; carregando?: boolean; onToggle?: () => void; zebra?: boolean;
     // Desvio pinta os dois lados: verde = gastou menos que o previsto.
     corDesvio?: boolean;
+    // Só no comparativo: o planejado que acompanha o realizado de `arr`.
+    arrPlan?: number[];
   }): ReactNode {
     const total = somaVis(opts.arr);
     const cel = "px-2 py-1.5 text-right tabular-nums whitespace-nowrap";
@@ -308,18 +351,27 @@ export default function CustosPage() {
             </span>
           </button>
         </td>
-        {mesesVis.map((m) => {
-          const v = opts.arr[m] ?? 0;
-          return (
-            <td key={m} className={cn(cel, v !== 0 && corValor(v))}>
-              {v !== 0 ? formatNumero(v) : <span className="text-[var(--text-muted)]/40">–</span>}
-            </td>
-          );
-        })}
-        {mostrarTotal && (
-          <td className={cn(cel, "border-l border-[var(--border)] font-bold", total !== 0 && corValor(total))}>
-            {formatNumero(total)}
-          </td>
+        {comparativo ? (
+          <>
+            {mesesVis.map((m) => blocoComparativo(opts.arrPlan?.[m] ?? 0, opts.arr[m] ?? 0, `m${m}`, cel, mudo))}
+            {mostrarTotal && blocoComparativo(somaVis(opts.arrPlan ?? []), total, "tot", cn(cel, "font-bold"), mudo)}
+          </>
+        ) : (
+          <>
+            {mesesVis.map((m) => {
+              const v = opts.arr[m] ?? 0;
+              return (
+                <td key={m} className={cn(cel, v !== 0 && corValor(v))}>
+                  {v !== 0 ? formatNumero(v) : <span className="text-[var(--text-muted)]/40">–</span>}
+                </td>
+              );
+            })}
+            {mostrarTotal && (
+              <td className={cn(cel, "border-l border-[var(--border)] font-bold", total !== 0 && corValor(total))}>
+                {formatNumero(total)}
+              </td>
+            )}
+          </>
         )}
       </tr>
     );
@@ -336,7 +388,8 @@ export default function CustosPage() {
     out.push(linhaMes({
       chave: `n-${no.key}`, depth, nome: no.nome,
       codigoTag: no.codigo ? `${no.codigo}.` : undefined,
-      arr: valoresDoModo(no, modo), tipo: "conta", corDesvio: modo === "desvio",
+      arr: valoresDoModo(no, modo), arrPlan: no.planejado,
+      tipo: "conta", corDesvio: modo === "desvio",
       expandivel: !folha || detalhavel,
       aberto: folha ? detAberto : filhosAbertos,
       carregando: folha && carregandoEste,
@@ -489,14 +542,28 @@ export default function CustosPage() {
         <table className="min-w-full text-xs">
           <thead>
             <tr className="bg-[#0000C2] text-white">
-              <th className="sticky left-0 z-10 bg-[#0000C2] px-3 py-2 text-left font-semibold min-w-64">
+              <th rowSpan={comparativo ? 2 : 1} className="sticky left-0 z-10 bg-[#0000C2] px-3 py-2 text-left font-semibold min-w-64">
                 Conta / Unidade / Fornecedor
               </th>
               {mesesVis.map((m) => (
-                <th key={m} className="border-l border-white/20 px-2 py-1.5 text-right font-semibold">{MESES_CURTO[m]}</th>
+                <th key={m} colSpan={porMesCols}
+                  className={cn("border-l border-white/20 px-2 py-1.5 font-semibold", comparativo ? "text-center" : "text-right")}>
+                  {MESES_CURTO[m]}
+                </th>
               ))}
-              {mostrarTotal && <th className="border-l border-white/20 px-2 py-1.5 text-right font-semibold">Total</th>}
+              {mostrarTotal && (
+                <th colSpan={porMesCols}
+                  className={cn("border-l border-white/20 px-2 py-1.5 font-semibold", comparativo ? "text-center" : "text-right")}>
+                  Total
+                </th>
+              )}
             </tr>
+            {comparativo && (
+              <tr className="bg-[#0000C2] text-white/80">
+                {mesesVis.map((m) => <MiniCabecalho key={m} />)}
+                {mostrarTotal && <MiniCabecalho />}
+              </tr>
+            )}
           </thead>
           <tbody>
             {carregando
