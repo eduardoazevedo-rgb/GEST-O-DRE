@@ -21,15 +21,17 @@ import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { userRoleLabel } from "@/lib/labels";
 import { useAuth } from "@/context/AuthContext";
+import type { ModuloId } from "@/lib/modulos";
 import AlterarSenhaModal from "@/components/AlterarSenhaModal";
 
-const navItems = [
-  { href: "/executivo", label: "Executivo", icon: Gauge },
-  { href: "/dre", label: "DRE", icon: Table2 },
-  { href: "/custos", label: "Análise de custos", icon: Receipt },
-  { href: "/viagens", label: "Custo de Viagens", icon: Plane, viagensOnly: true },
-  { href: "/auditoria", label: "Auditoria", icon: ClipboardCheck, auditoriaOnly: true },
-  { href: "/orcamento", label: "Orçamento", icon: Target },
+// modulo = liberado por usuário (tabela usuario_modulos); adminOnly = só admin.
+const navItems: { href: string; label: string; icon: typeof Gauge; modulo?: ModuloId; adminOnly?: boolean }[] = [
+  { href: "/executivo", label: "Executivo", icon: Gauge, modulo: "executivo" },
+  { href: "/dre", label: "DRE", icon: Table2, modulo: "dre" },
+  { href: "/custos", label: "Análise de custos", icon: Receipt, modulo: "custos" },
+  { href: "/viagens", label: "Custo de Viagens", icon: Plane, modulo: "viagens" },
+  { href: "/auditoria", label: "Auditoria", icon: ClipboardCheck, modulo: "auditoria" },
+  { href: "/orcamento", label: "Orçamento", icon: Target, modulo: "orcamento" },
   { href: "/plano-contas", label: "Plano de Contas", icon: ListTree, adminOnly: true },
   { href: "/sincronizacao", label: "Sincronização", icon: RefreshCw, adminOnly: true },
   { href: "/usuarios", label: "Usuários", icon: UserCog, adminOnly: true },
@@ -43,7 +45,7 @@ interface SidebarProps {
 export default function Sidebar({ open, onClose }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const { profile, isAdmin, podeVerViagens, podeVerAuditoria, signOut } = useAuth();
+  const { profile, isAdmin, podeVerModulo, signOut } = useAuth();
   const [senhaAberta, setSenhaAberta] = useState(false);
 
   async function handleSignOut() {
@@ -89,7 +91,9 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
 
         {/* Nav */}
         <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
-          {navItems.filter(item => (!("adminOnly" in item && item.adminOnly) || isAdmin) && (!("viagensOnly" in item && item.viagensOnly) || podeVerViagens) && (!("auditoriaOnly" in item && item.auditoriaOnly) || podeVerAuditoria)).map(({ href, label, icon: Icon }) => {
+          {navItems
+            .filter((item) => (item.adminOnly ? isAdmin : !item.modulo || podeVerModulo(item.modulo)))
+            .map(({ href, label, icon: Icon }) => {
             const active =
               pathname === href || pathname.startsWith(href + "/");
             return (

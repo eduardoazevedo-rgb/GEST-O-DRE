@@ -4,6 +4,7 @@ import { ShieldAlert } from "lucide-react";
 import CriarUsuarioForm from "@/components/usuarios/CriarUsuarioForm";
 import UsuariosTabela, { type UsuarioLinha } from "@/components/usuarios/UsuariosTabela";
 import type { UserRole } from "@/lib/types";
+import { ehModulo, type ModuloId } from "@/lib/modulos";
 
 export const dynamic = "force-dynamic";
 
@@ -25,18 +26,24 @@ export default async function UsuariosPage() {
   }
 
   const admin = createAdminClient();
-  const [{ data: authUsers }, { data: perfis }, { data: vFiliais }, { data: vContas }] = await Promise.all([
+  const [{ data: authUsers }, { data: perfis }, { data: vFiliais }, { data: vContas }, { data: vModulos }] = await Promise.all([
     admin.auth.admin.listUsers(),
-    admin.from("profiles").select("id,nome,role,ativo,restringe_empresas,restringe_contas,pode_sincronizar,pode_ver_viagens,pode_importar_viagens,pode_ver_auditoria"),
+    admin.from("profiles").select("id,nome,role,ativo,restringe_empresas,restringe_contas,pode_sincronizar,pode_importar_viagens"),
     admin.from("usuario_filiais").select("user_id"),
     admin.from("usuario_contas").select("user_id"),
+    admin.from("usuario_modulos").select("user_id,modulo"),
   ]);
 
   type PerfilRow = {
     id: string; nome: string; role: UserRole; ativo: boolean;
     restringe_empresas: boolean; restringe_contas: boolean; pode_sincronizar: boolean;
-    pode_ver_viagens: boolean; pode_importar_viagens: boolean; pode_ver_auditoria: boolean;
+    pode_importar_viagens: boolean;
   };
+  const modulosPorUser = new Map<string, ModuloId[]>();
+  for (const m of (vModulos ?? []) as { user_id: string; modulo: string }[]) {
+    if (!ehModulo(m.modulo)) continue;
+    modulosPorUser.set(m.user_id, [...(modulosPorUser.get(m.user_id) ?? []), m.modulo]);
+  }
   const perfilPorId = new Map((perfis ?? []).map(p => [p.id as string, p as PerfilRow]));
   const contaVinculos = (lista: { user_id: string }[] | null) => {
     const m = new Map<string, number>();
@@ -59,9 +66,8 @@ export default async function UsuariosPage() {
       unidadesVinculadas: filiaisPorUser.get(u.id) ?? 0,
       contasVinculadas: contasPorUser.get(u.id) ?? 0,
       podeSincronizar: perfilPorId.get(u.id)?.pode_sincronizar ?? false,
-      podeVerViagens: perfilPorId.get(u.id)?.pode_ver_viagens ?? false,
       podeImportarViagens: perfilPorId.get(u.id)?.pode_importar_viagens ?? false,
-      podeVerAuditoria: perfilPorId.get(u.id)?.pode_ver_auditoria ?? false,
+      modulos: modulosPorUser.get(u.id) ?? [],
     }))
     .sort((a, b) => a.nome.localeCompare(b.nome));
 

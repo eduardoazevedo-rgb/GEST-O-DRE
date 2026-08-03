@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireAdmin } from "@/lib/auth/require-admin";
+import { ehModulo } from "@/lib/modulos";
 
 interface PatchBody {
   nome?: string;
@@ -8,9 +9,9 @@ interface PatchBody {
   senha?: string;
   ativo?: boolean;
   pode_sincronizar?: boolean;
-  pode_ver_viagens?: boolean;
   pode_importar_viagens?: boolean;
-  pode_ver_auditoria?: boolean;
+  /** Lista completa de módulos liberados (substitui a atual). */
+  modulos?: string[];
 }
 
 /** Edita nome/perfil/senha e ativa/desativa um usuário (só admin). */
@@ -56,12 +57,23 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (role !== undefined) campos.role = role;
   if (ativo !== undefined) campos.ativo = ativo;
   if (body.pode_sincronizar !== undefined) campos.pode_sincronizar = body.pode_sincronizar === true;
-  if (body.pode_ver_viagens !== undefined) campos.pode_ver_viagens = body.pode_ver_viagens === true;
   if (body.pode_importar_viagens !== undefined) campos.pode_importar_viagens = body.pode_importar_viagens === true;
-  if (body.pode_ver_auditoria !== undefined) campos.pode_ver_auditoria = body.pode_ver_auditoria === true;
   if (Object.keys(campos).length > 0) {
     const { error } = await admin.from("profiles").update(campos).eq("id", id);
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  }
+
+  // Módulos: a lista recebida vira a lista do usuário (troca completa).
+  if (body.modulos !== undefined) {
+    const modulos = [...new Set(body.modulos.filter(ehModulo))];
+    const { error: errDel } = await admin.from("usuario_modulos").delete().eq("user_id", id);
+    if (errDel) return NextResponse.json({ error: errDel.message }, { status: 400 });
+    if (modulos.length > 0) {
+      const { error: errIns } = await admin
+        .from("usuario_modulos")
+        .insert(modulos.map((modulo) => ({ user_id: id, modulo })));
+      if (errIns) return NextResponse.json({ error: errIns.message }, { status: 400 });
+    }
   }
 
   return NextResponse.json({ ok: true });

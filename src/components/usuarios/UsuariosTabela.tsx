@@ -6,6 +6,7 @@ import { Pencil, Link2, Power } from "lucide-react";
 import { userRoleLabel } from "@/lib/labels";
 import { useToast } from "@/context/ToastContext";
 import type { UserRole } from "@/lib/types";
+import { MODULOS_IDS, rotuloModulo, type ModuloId } from "@/lib/modulos";
 import Badge from "@/components/ui/Badge";
 import ConfirmDialog from "@/components/ui/ConfirmDialog";
 import EditarUsuarioModal from "./EditarUsuarioModal";
@@ -23,9 +24,8 @@ export interface UsuarioLinha {
   unidadesVinculadas: number;
   contasVinculadas: number;
   podeSincronizar: boolean;
-  podeVerViagens: boolean;
   podeImportarViagens: boolean;
-  podeVerAuditoria: boolean;
+  modulos: ModuloId[];
 }
 
 function resumoVinculos(u: UsuarioLinha): string {
@@ -36,6 +36,13 @@ function resumoVinculos(u: UsuarioLinha): string {
     ? `${u.contasVinculadas} conta${u.contasVinculadas !== 1 ? "s" : ""}`
     : "Todas as contas";
   return `${unidades} · ${contas}`;
+}
+
+function resumoModulos(modulos: ModuloId[]) {
+  if (modulos.length === 0) return <span className="text-red-600 dark:text-red-400">Nenhum</span>;
+  if (modulos.length === MODULOS_IDS.length) return "Todos";
+  const nomes = MODULOS_IDS.filter((m) => modulos.includes(m)).map(rotuloModulo);
+  return <span className="block truncate" title={nomes.join(" · ")}>{nomes.join(" · ")}</span>;
 }
 
 interface Props {
@@ -85,13 +92,14 @@ export default function UsuariosTabela({ usuarios, currentUserId }: Props) {
               <th className="text-left px-4 py-3 font-medium">Perfil</th>
               <th className="text-left px-4 py-3 font-medium">Status</th>
               <th className="text-left px-4 py-3 font-medium hidden md:table-cell">Vínculos</th>
+              <th className="text-left px-4 py-3 font-medium hidden lg:table-cell">Módulos</th>
               <th className="text-left px-4 py-3 font-medium hidden sm:table-cell">Último acesso</th>
               <th className="text-right px-4 py-3 font-medium">Ações</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-[var(--border)]">
             {usuarios.length === 0 ? (
-              <tr><td colSpan={7} className="text-center py-10 text-[var(--text-muted)]">Nenhum usuário encontrado.</td></tr>
+              <tr><td colSpan={8} className="text-center py-10 text-[var(--text-muted)]">Nenhum usuário encontrado.</td></tr>
             ) : usuarios.map(u => (
               <tr key={u.id} className={`hover:bg-gray-50 dark:hover:bg-slate-700/30 transition-colors ${!u.ativo ? "opacity-60" : ""}`}>
                 <td className="px-4 py-3 font-medium text-[var(--text)]">{u.nome}</td>
@@ -104,6 +112,9 @@ export default function UsuariosTabela({ usuarios, currentUserId }: Props) {
                 </td>
                 <td className="px-4 py-3 text-[var(--text-muted)] hidden md:table-cell">
                   {u.role === "admin" ? "Tudo (admin)" : resumoVinculos(u)}
+                </td>
+                <td className="px-4 py-3 text-[var(--text-muted)] hidden lg:table-cell max-w-56">
+                  {u.role === "admin" ? "Todos (admin)" : resumoModulos(u.modulos)}
                 </td>
                 <td className="px-4 py-3 text-[var(--text-muted)] hidden sm:table-cell">
                   {u.ultimoLogin ? new Date(u.ultimoLogin).toLocaleString("pt-BR") : "Nunca"}

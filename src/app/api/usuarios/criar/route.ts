@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireAdmin } from "@/lib/auth/require-admin";
+import { ehModulo, MODULOS_PADRAO } from "@/lib/modulos";
 
 export async function POST(req: NextRequest) {
   const guard = await requireAdmin();
   if (guard.error) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
-  const body = await req.json().catch(() => ({})) as { nome?: string; email?: string; senha?: string; role?: string };
+  const body = await req.json().catch(() => ({})) as
+    { nome?: string; email?: string; senha?: string; role?: string; modulos?: string[] };
   const nome = body.nome?.trim();
   const email = body.email?.trim().toLowerCase();
   const senha = body.senha ?? "";
@@ -29,6 +31,16 @@ export async function POST(req: NextRequest) {
       ? "Já existe um usuário com esse e-mail"
       : error.message;
     return NextResponse.json({ error: msg }, { status: 400 });
+  }
+
+  // Módulos do usuário novo (o gatilho do profile já rodou junto com o create).
+  if (role !== "admin") {
+    const modulos = body.modulos === undefined
+      ? MODULOS_PADRAO
+      : [...new Set(body.modulos.filter(ehModulo))];
+    if (modulos.length > 0) {
+      await admin.from("usuario_modulos").insert(modulos.map((modulo) => ({ user_id: data.user.id, modulo })));
+    }
   }
 
   return NextResponse.json({ id: data.user.id, email: data.user.email, nome, role });

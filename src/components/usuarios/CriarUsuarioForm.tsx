@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { UserPlus, Dices, Copy, CheckCircle2 } from "lucide-react";
 import { userRoleOptions } from "@/lib/labels";
+import { MODULOS, MODULOS_PADRAO, type ModuloId } from "@/lib/modulos";
 import { useToast } from "@/context/ToastContext";
 import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
@@ -21,6 +22,7 @@ export default function CriarUsuarioForm() {
   const [email, setEmail] = useState("");
   const [senha, setSenha] = useState("");
   const [role, setRole] = useState("gestor");
+  const [modulos, setModulos] = useState<ModuloId[]>([...MODULOS_PADRAO]);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [criado, setCriado] = useState<{ email: string; senha: string } | null>(null);
@@ -46,7 +48,7 @@ export default function CriarUsuarioForm() {
       const res = await fetch("/api/usuarios/criar", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nome: nome.trim(), email: email.trim(), senha, role }),
+        body: JSON.stringify({ nome: nome.trim(), email: email.trim(), senha, role, modulos }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -56,7 +58,7 @@ export default function CriarUsuarioForm() {
       }
       setCriado({ email: email.trim(), senha });
       toast("Usuário criado!");
-      setNome(""); setEmail(""); setSenha(""); setRole("gestor"); setErrors({});
+      setNome(""); setEmail(""); setSenha(""); setRole("gestor"); setModulos([...MODULOS_PADRAO]); setErrors({});
       router.refresh();
     } catch {
       toast("Erro de conexão com o servidor", "error");
@@ -110,6 +112,29 @@ export default function CriarUsuarioForm() {
         </div>
 
         <Select label="Perfil *" value={role} onChange={e => setRole(e.target.value)} options={userRoleOptions} />
+
+        <div className="sm:col-span-2">
+          {role === "admin" ? (
+            <p className="text-xs text-[var(--text-muted)]">Administradores enxergam todos os módulos.</p>
+          ) : (
+            <div className="space-y-2 rounded-lg border border-[var(--border)] p-3">
+              <p className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">Módulos liberados</p>
+              <div className="flex flex-wrap gap-x-5 gap-y-2">
+                {MODULOS.map((m) => (
+                  <label key={m.id} className="flex items-center gap-2 text-sm text-[var(--text)] cursor-pointer select-none">
+                    <input type="checkbox" checked={modulos.includes(m.id)}
+                      onChange={(e) => setModulos((prev) => e.target.checked ? [...prev.filter(x => x !== m.id), m.id] : prev.filter(x => x !== m.id))}
+                      className="h-4 w-4 rounded border-[var(--border)] accent-[var(--primary)]" />
+                    {m.label}
+                  </label>
+                ))}
+              </div>
+              <p className="text-xs text-[var(--text-muted)]">
+                Dá pra ajustar depois em Editar. Unidades e contas continuam nos Vínculos.
+              </p>
+            </div>
+          )}
+        </div>
 
         <div className="sm:col-span-2">
           <Button type="submit" loading={loading}>Cadastrar usuário</Button>

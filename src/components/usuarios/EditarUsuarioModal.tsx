@@ -4,6 +4,8 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Dices, X } from "lucide-react";
 import { userRoleOptions } from "@/lib/labels";
+import { cn } from "@/lib/utils";
+import { MODULOS, MODULOS_IDS, type ModuloId } from "@/lib/modulos";
 import { useToast } from "@/context/ToastContext";
 import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
@@ -27,9 +29,17 @@ export default function EditarUsuarioModal({ usuario, isSelf, onClose }: Props) 
   const [nome, setNome] = useState(usuario.nome);
   const [role, setRole] = useState<string>(usuario.role);
   const [podeSincronizar, setPodeSincronizar] = useState<boolean>(usuario.podeSincronizar);
-  const [podeVerViagens, setPodeVerViagens] = useState<boolean>(usuario.podeVerViagens);
   const [podeImportarViagens, setPodeImportarViagens] = useState<boolean>(usuario.podeImportarViagens);
-  const [podeVerAuditoria, setPodeVerAuditoria] = useState<boolean>(usuario.podeVerAuditoria);
+  const [modulos, setModulos] = useState<ModuloId[]>(usuario.modulos);
+  const temModulo = (m: ModuloId) => modulos.includes(m);
+  function alternarModulo(m: ModuloId, marcado: boolean) {
+    setModulos((prev) => {
+      const sem = prev.filter((x) => x !== m);
+      return marcado ? [...sem, m] : sem;
+    });
+    // Importar viagens não faz sentido sem a aba de viagens.
+    if (m === "viagens" && !marcado) setPodeImportarViagens(false);
+  }
   const [senha, setSenha] = useState("");
   const [loading, setLoading] = useState(false);
   const router = useRouter();
@@ -44,8 +54,7 @@ export default function EditarUsuarioModal({ usuario, isSelf, onClose }: Props) 
     try {
       const body: Record<string, unknown> = {
         nome: nome.trim(), role, pode_sincronizar: podeSincronizar,
-        pode_ver_viagens: podeVerViagens, pode_importar_viagens: podeImportarViagens,
-        pode_ver_auditoria: podeVerAuditoria,
+        pode_importar_viagens: podeImportarViagens, modulos,
       };
       if (senha) body.senha = senha;
       const res = await fetch(`/api/usuarios/${usuario.id}`, {
@@ -89,32 +98,50 @@ export default function EditarUsuarioModal({ usuario, isSelf, onClose }: Props) 
           {isSelf && <p className="text-xs text-[var(--text-muted)] -mt-2">Você não pode alterar o próprio perfil.</p>}
 
           {role === "admin" ? (
-            <p className="text-xs text-[var(--text-muted)]">Administradores têm todas as permissões (sincronizar, viagens e auditoria).</p>
+            <p className="text-xs text-[var(--text-muted)]">Administradores enxergam todos os módulos e têm todas as permissões.</p>
           ) : (
-            <div className="space-y-2 rounded-lg border border-[var(--border)] p-3">
-              <p className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">Permissões</p>
-              <label className="flex items-center gap-2 text-sm text-[var(--text)] cursor-pointer select-none">
-                <input type="checkbox" checked={podeSincronizar} onChange={(e) => setPodeSincronizar(e.target.checked)}
-                  className="h-4 w-4 rounded border-[var(--border)] accent-[var(--primary)]" />
-                Disparar a sincronização (botão &ldquo;Atualizar agora&rdquo;)
-              </label>
-              <label className="flex items-center gap-2 text-sm text-[var(--text)] cursor-pointer select-none">
-                <input type="checkbox" checked={podeVerViagens} onChange={(e) => setPodeVerViagens(e.target.checked)}
-                  className="h-4 w-4 rounded border-[var(--border)] accent-[var(--primary)]" />
-                Ver a aba Custo de Viagens
-              </label>
-              <label className="flex items-center gap-2 text-sm text-[var(--text)] cursor-pointer select-none">
-                <input type="checkbox" checked={podeImportarViagens}
-                  onChange={(e) => { setPodeImportarViagens(e.target.checked); if (e.target.checked) setPodeVerViagens(true); }}
-                  className="h-4 w-4 rounded border-[var(--border)] accent-[var(--primary)]" />
-                Importar planilhas de viagens
-              </label>
-              <label className="flex items-center gap-2 text-sm text-[var(--text)] cursor-pointer select-none">
-                <input type="checkbox" checked={podeVerAuditoria} onChange={(e) => setPodeVerAuditoria(e.target.checked)}
-                  className="h-4 w-4 rounded border-[var(--border)] accent-[var(--primary)]" />
-                Ver a aba Auditoria (ajustes de inventário)
-              </label>
-            </div>
+            <>
+              <div className="space-y-2 rounded-lg border border-[var(--border)] p-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">Módulos liberados</p>
+                  <div className="flex gap-2 text-[11px]">
+                    <button type="button" onClick={() => setModulos([...MODULOS_IDS])}
+                      className="text-[var(--primary)] hover:underline">todos</button>
+                    <button type="button" onClick={() => { setModulos([]); setPodeImportarViagens(false); }}
+                      className="text-[var(--text-muted)] hover:underline">nenhum</button>
+                  </div>
+                </div>
+                {MODULOS.map((m) => (
+                  <label key={m.id} className="flex items-center gap-2 text-sm text-[var(--text)] cursor-pointer select-none">
+                    <input type="checkbox" checked={temModulo(m.id)} onChange={(e) => alternarModulo(m.id, e.target.checked)}
+                      className="h-4 w-4 rounded border-[var(--border)] accent-[var(--primary)]" />
+                    {m.label}
+                  </label>
+                ))}
+                {modulos.length === 0 && (
+                  <p className="text-xs text-red-600 dark:text-red-400">
+                    Sem nenhum módulo o usuário entra no sistema e não vê tela alguma.
+                  </p>
+                )}
+              </div>
+
+              <div className="space-y-2 rounded-lg border border-[var(--border)] p-3">
+                <p className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">Ações</p>
+                <label className="flex items-center gap-2 text-sm text-[var(--text)] cursor-pointer select-none">
+                  <input type="checkbox" checked={podeSincronizar} onChange={(e) => setPodeSincronizar(e.target.checked)}
+                    className="h-4 w-4 rounded border-[var(--border)] accent-[var(--primary)]" />
+                  Disparar a sincronização (botão &ldquo;Atualizar agora&rdquo;)
+                </label>
+                <label className={cn("flex items-center gap-2 text-sm cursor-pointer select-none",
+                  temModulo("viagens") ? "text-[var(--text)]" : "text-[var(--text-muted)] cursor-not-allowed")}>
+                  <input type="checkbox" checked={podeImportarViagens} disabled={!temModulo("viagens")}
+                    onChange={(e) => setPodeImportarViagens(e.target.checked)}
+                    className="h-4 w-4 rounded border-[var(--border)] accent-[var(--primary)]" />
+                  Importar planilhas de viagens
+                  {!temModulo("viagens") && <span className="text-xs">(exige o módulo Custo de Viagens)</span>}
+                </label>
+              </div>
+            </>
           )}
 
           <div className="flex flex-col gap-1">
