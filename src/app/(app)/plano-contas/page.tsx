@@ -3,12 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link2, Upload } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { useEmpresa } from "@/context/EmpresaContext";
 import { useToast } from "@/context/ToastContext";
 import { formatNumero } from "@/lib/labels";
 import Button from "@/components/ui/Button";
 import type { DeParaConta, DreResposta, PlanoConta } from "@/lib/types";
 
-const EMPRESA_ID = 1;
 
 function comparaCodigos(a: string, b: string): number {
   const sa = a.split(".").map(Number);
@@ -22,6 +22,7 @@ function comparaCodigos(a: string, b: string): number {
 }
 
 export default function PlanoContasPage() {
+  const { empresaId: EMPRESA_ID } = useEmpresa();
   const [plano, setPlano] = useState<PlanoConta[]>([]);
   const [dePara, setDePara] = useState<DeParaConta[]>([]);
   const [naoMapeado, setNaoMapeado] = useState<DreResposta["naoMapeado"]>([]);
@@ -62,7 +63,7 @@ export default function PlanoContasPage() {
       // realizado ainda não sincronizado — sem problema
     }
     setCarregando(false);
-  }, [supabase]);
+  }, [supabase, EMPRESA_ID]);
 
   useEffect(() => {
     carregar();

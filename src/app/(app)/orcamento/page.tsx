@@ -3,12 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Download, Plus, Save, Upload } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { useEmpresa } from "@/context/EmpresaContext";
 import { useToast } from "@/context/ToastContext";
 import { MESES_CURTO, formatNumero } from "@/lib/labels";
 import Button from "@/components/ui/Button";
 import type { OrcamentoVersao, PlanoConta } from "@/lib/types";
 
-const EMPRESA_ID = 1;
 
 /** chave "codigo|mes" -> valor */
 type Valores = Map<string, number>;
@@ -29,6 +29,7 @@ function comparaCodigos(a: string, b: string): number {
 }
 
 export default function OrcamentoPage() {
+  const { empresaId: EMPRESA_ID } = useEmpresa();
   const anoAtual = new Date().getFullYear();
   const [ano, setAno] = useState(anoAtual);
   const [versoes, setVersoes] = useState<OrcamentoVersao[]>([]);
@@ -56,7 +57,7 @@ export default function OrcamentoPage() {
     setVersoes(data ?? []);
     const ativa = (data ?? []).find((v) => v.ativa) ?? (data ?? [])[0];
     setVersaoId(ativa?.id ?? "");
-  }, [ano, supabase, toast]);
+  }, [ano, supabase, toast, EMPRESA_ID]);
 
   useEffect(() => {
     carregarVersoes();
@@ -91,7 +92,7 @@ export default function OrcamentoPage() {
       setAlterados(new Set());
       setCarregando(false);
     })();
-  }, [versaoId, supabase]);
+  }, [versaoId, supabase, EMPRESA_ID]);
 
   async function criarVersao() {
     const nome = window.prompt(`Nome da nova versão do orçamento ${ano}:`, `Orçamento ${ano}`);

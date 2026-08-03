@@ -13,7 +13,18 @@ const req = createRequire(PROJ + "/package.json");
 const Firebird = req("node-firebird");
 const { createClient } = req("@supabase/supabase-js");
 
+// Empresa padrão (HOFF) — usada quando a filial do ERP não está cadastrada.
 export const EMPRESA_ID = 1;
+
+// cd_empresa (ERP) → empresa_id (portal). Vem da tabela filiais, que é a fonte
+// de verdade: 1000–1024 = HOFF, 2000 = LDK2, 4000 = DMCL.
+export async function carregarMapaEmpresas(supabase) {
+  const { data, error } = await supabase.from("filiais").select("cd_empresa, empresa_id");
+  if (error) throw new Error(`Supabase (filiais): ${error.message}`);
+  const mapa = new Map((data ?? []).map((f) => [Number(f.cd_empresa), Number(f.empresa_id)]));
+  const ids = [...new Set([EMPRESA_ID, ...mapa.values()])];
+  return { mapa, ids };
+}
 
 export function carregarEnv() {
   const env = {};
@@ -46,8 +57,10 @@ export function criarFirebird(env) {
   return { query };
 }
 
+// Vazio = traz todas as filiais do ERP. As 2000/4000 viraram empresas próprias
+// no portal (LDK2 e DMCL), então não são mais excluídas.
 export function excluidas(env) {
-  const raw = env.FIREBIRD_EXCLUIR_EMPRESAS ?? "2000,4000";
+  const raw = env.FIREBIRD_EXCLUIR_EMPRESAS ?? "";
   const nums = raw.split(",").map((s) => Number(s.trim())).filter(Number.isInteger);
   return nums.length > 0 ? nums.join(",") : "0";
 }
@@ -80,11 +93,11 @@ function sqlAgregacao(iniBR, fimExclBR, exc) {
     GROUP BY X.CD_EMPRESA, X.ANO, X.MES, X.CONTA, X.CD_CLASSIFICACAO, X.DS_CONTA, X.CD_PESSOA`;
 }
 
-function mapRegistros(rows) {
+function mapRegistros(rows, mapaEmp) {
   return rows
     .filter((r) => Number(r.SALDO) !== 0)
     .map((r) => ({
-      empresa_id: EMPRESA_ID,
+      empresa_id: mapaEmp?.get(Number(r.CD_EMPRESA)) ?? EMPRESA_ID,
       cd_empresa_erp: Number(r.CD_EMPRESA),
       competencia: `${r.ANO}-${String(r.MES).padStart(2, "0")}-01`,
       cd_conta_erp: Number(r.CONTA),
@@ -154,14 +167,15 @@ export async function releaseLock(supabase) {
 }
 
 // Reprocessa uma competência (ano, mes): agrega no Firebird, apaga e reinsere.
-async function reprocessarMes(supabase, fb, exc, ano, mes) {
+// O delete cobre todas as empresas do portal, porque a agregação traz todas.
+async function reprocessarMes(supabase, fb, exc, ano, mes, emp) {
   const iniBR = br(ano, mes, 1);
   const fimExclBR = mes === 12 ? br(ano + 1, 1, 1) : br(ano, mes + 1, 1);
   const rows = await fb.query(sqlAgregacao(iniBR, fimExclBR, exc));
-  const registros = mapRegistros(rows);
+  const registros = mapRegistros(rows, emp?.mapa);
   const competencia = `${ano}-${String(mes).padStart(2, "0")}-01`;
   const del = await supabase.from("realizado_erp").delete()
-    .eq("empresa_id", EMPRESA_ID).eq("competencia", competencia);
+    .in("empresa_id", emp?.ids ?? [EMPRESA_ID]).eq("competencia", competencia);
   if (del.error) throw new Error(`Supabase (delete ${competencia}): ${del.error.message}`);
   await inserirLote(supabase, "realizado_erp", registros);
   return registros;
@@ -218,10 +232,11 @@ export async function sincronizarAjustes(supabase, fb, exc, ano) {
 
 // full: reprocessa o ano inteiro (mês a mês, reaproveitando reprocessarMes).
 export async function executarFull(supabase, fb, exc, ano) {
+  const emp = await carregarMapaEmpresas(supabase);
   const cdPessoas = new Set();
   let total = 0;
   for (let mes = 1; mes <= 12; mes++) {
-    const regs = await reprocessarMes(supabase, fb, exc, ano, mes);
+    const regs = await reprocessarMes(supabase, fb, exc, ano, mes, emp);
     for (const r of regs) if (r.cd_pessoa != null) cdPessoas.add(r.cd_pessoa);
     total += regs.length;
   }
@@ -259,10 +274,11 @@ export async function executarIncremental(supabase, fb, exc) {
     .map((r) => ({ ano: Number(r.ANO), mes: Number(r.MES) }))
     .filter((x) => x.ano >= 2000 && x.mes >= 1 && x.mes <= 12);
 
+  const emp = await carregarMapaEmpresas(supabase);
   const cdPessoas = new Set();
   let total = 0;
   for (const { ano, mes } of meses) {
-    const regs = await reprocessarMes(supabase, fb, exc, ano, mes);
+    const regs = await reprocessarMes(supabase, fb, exc, ano, mes, emp);
     for (const r of regs) if (r.cd_pessoa != null) cdPessoas.add(r.cd_pessoa);
     total += regs.length;
   }

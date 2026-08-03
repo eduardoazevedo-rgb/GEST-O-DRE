@@ -4,12 +4,12 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Building2, ChevronDown, ChevronRight, X } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { useEmpresa } from "@/context/EmpresaContext";
 import { useToast } from "@/context/ToastContext";
 import Button from "@/components/ui/Button";
 import type { Filial, PlanoConta } from "@/lib/types";
 import type { UsuarioLinha } from "./UsuariosTabela";
 
-const EMPRESA_ID = 1;
 
 interface Props {
   usuario: UsuarioLinha;
@@ -55,12 +55,16 @@ function montarArvore(plano: PlanoConta[]): No[] {
 }
 
 export default function VinculosModal({ usuario, onClose }: Props) {
+  const { empresaId: EMPRESA_ID, empresa: empresaAtual } = useEmpresa();
   const [carregando, setCarregando] = useState(true);
   const [salvando, setSalvando] = useState(false);
   const [filiais, setFiliais] = useState<Filial[]>([]);
   const [plano, setPlano] = useState<PlanoConta[]>([]);
   const [filiaisSel, setFiliaisSel] = useState<Set<number>>(new Set());
   const [contasSel, setContasSel] = useState<Set<string>>(new Set());
+  // Contas vinculadas nas OUTRAS empresas: o modal edita só a empresa atual,
+  // mas o PUT substitui a lista inteira — então elas voltam junto no salvar.
+  const [contasOutras, setContasOutras] = useState<{ empresa_id: number; codigo: string }[]>([]);
   const [restringeEmpresas, setRestringeEmpresas] = useState(true);
   const [restringeContas, setRestringeContas] = useState(true);
   const [abertos, setAbertos] = useState<Set<string>>(new Set());
@@ -88,7 +92,9 @@ export default function VinculosModal({ usuario, onClose }: Props) {
         setPlano(planoTudo);
         setFiliais((fils ?? []) as Filial[]);
         setFiliaisSel(new Set<number>(vinc.filiais ?? []));
-        setContasSel(new Set<string>((vinc.contas ?? []).map((c: { codigo: string }) => c.codigo)));
+        const todasContas = (vinc.contas ?? []) as { empresa_id: number; codigo: string }[];
+        setContasSel(new Set(todasContas.filter((c) => c.empresa_id === EMPRESA_ID).map((c) => c.codigo)));
+        setContasOutras(todasContas.filter((c) => c.empresa_id !== EMPRESA_ID));
         setRestringeEmpresas(vinc.restringe_empresas !== false);
         setRestringeContas(vinc.restringe_contas !== false);
         // abre os grupos N2 por padrão
@@ -101,7 +107,7 @@ export default function VinculosModal({ usuario, onClose }: Props) {
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [usuario.id]);
+  }, [usuario.id, EMPRESA_ID]);
 
   const arvore = useMemo(() => montarArvore(plano), [plano]);
 
@@ -145,7 +151,7 @@ export default function VinculosModal({ usuario, onClose }: Props) {
           restringe_empresas: restringeEmpresas,
           restringe_contas: restringeContas,
           filiais: [...filiaisSel],
-          contas: [...contasSel].map(codigo => ({ empresa_id: EMPRESA_ID, codigo })),
+          contas: [...contasOutras, ...[...contasSel].map(codigo => ({ empresa_id: EMPRESA_ID, codigo }))],
         }),
       });
       const data = await res.json();
@@ -285,6 +291,8 @@ export default function VinculosModal({ usuario, onClose }: Props) {
                 <>
                   <p className="text-xs text-[var(--text-muted)] text-right">
                     Marcar um grupo dá acesso a toda a subárvore dele · {contasSel.size} vínculo{contasSel.size !== 1 ? "s" : ""}
+                    {empresaAtual && <> na {empresaAtual.codigo}</>}
+                    {contasOutras.length > 0 && <> · {contasOutras.length} em outras empresas (preservados)</>}
                   </p>
                   <div className="flex-1 overflow-y-auto rounded-lg border border-[var(--border)] p-2">
                     {arvore.map(renderNo)}

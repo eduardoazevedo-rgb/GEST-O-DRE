@@ -3,7 +3,7 @@ import { createClient as createServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 
-const EMPRESA_ID = 1;
+const EMPRESA_PADRAO = 1; // HOFF
 
 export interface FornecedorDetalhe {
   cd_pessoa: number | null;
@@ -31,6 +31,8 @@ export async function GET(req: NextRequest) {
   if (!user) return NextResponse.json({ error: "Não autorizado" }, { status: 401 });
 
   const { searchParams } = new URL(req.url);
+  const empresaParam = Number(searchParams.get("empresa") ?? EMPRESA_PADRAO);
+  const empresa = Number.isInteger(empresaParam) && empresaParam > 0 ? empresaParam : EMPRESA_PADRAO;
   const ano = Number(searchParams.get("ano") ?? new Date().getFullYear());
   const codigo = (searchParams.get("codigo") ?? "").trim();
   if (!Number.isInteger(ano) || ano < 2000 || ano > 2099) {
@@ -41,7 +43,7 @@ export async function GET(req: NextRequest) {
   }
 
   const { data, error } = await supabase.rpc("custo_fornecedor_conta", {
-    p_empresa: EMPRESA_ID,
+    p_empresa: empresa,
     p_ano: ano,
     p_codigo: codigo,
   });

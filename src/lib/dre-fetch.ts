@@ -10,12 +10,13 @@ import type { DreResposta } from "@/lib/types";
 // RELOAD ou reabrir a aba no mesmo computador pinte instantaneamente, sem
 // esperar a rede. sessionStorage (e não localStorage) porque limpa sozinha ao
 // fechar a aba — não deixa dado financeiro parado no navegador.
-const STORAGE_KEY = "dre-cache-v2";
+const STORAGE_KEY = "dre-cache-v3";
 const TTL_MS = 12 * 60 * 60 * 1000; // hidrata só o que tem < 12h (higiene)
 
-// Chave = ano + unidade (null = empresa inteira), porque o mesmo ano tem uma
-// resposta diferente para cada filtro de unidade.
-const chave = (ano: number, unidade?: number | null) => (unidade == null ? `${ano}` : `${ano}|u${unidade}`);
+// Chave = empresa + ano + unidade (null = empresa inteira): cada combinação tem
+// uma resposta diferente.
+const chave = (ano: number, unidade?: number | null, empresa?: number) =>
+  `e${empresa ?? 1}|${ano}${unidade == null ? "" : `|u${unidade}`}`;
 
 const cache = new Map<string, DreResposta>();
 const inflight = new Map<string, Promise<DreResposta>>();
@@ -62,17 +63,17 @@ function persistir(k: string, data: DreResposta) {
   }
 }
 
-export function dreEmCache(ano: number, unidade?: number | null): DreResposta | undefined {
+export function dreEmCache(ano: number, unidade?: number | null, empresa?: number): DreResposta | undefined {
   garantirHidratado();
-  return cache.get(chave(ano, unidade));
+  return cache.get(chave(ano, unidade, empresa));
 }
 
-export function buscarDre(ano: number, unidade?: number | null): Promise<DreResposta> {
+export function buscarDre(ano: number, unidade?: number | null, empresa?: number): Promise<DreResposta> {
   garantirHidratado();
-  const k = chave(ano, unidade);
+  const k = chave(ano, unidade, empresa);
   const existente = inflight.get(k);
   if (existente) return existente;
-  const url = unidade == null ? `/api/dre?ano=${ano}` : `/api/dre?ano=${ano}&unidade=${unidade}`;
+  const url = `/api/dre?ano=${ano}&empresa=${empresa ?? 1}${unidade == null ? "" : `&unidade=${unidade}`}`;
   const p = fetch(url)
     .then(async (r) => {
       const j = await r.json();

@@ -55,5 +55,9 @@ O desvio favorável é sempre `realizado − planejado > 0`.
   filiais 2000/4000 e `tp_docto = 'A'`). Se o Power BI usava outra consulta
   (query `F_CUSTOS`), ajustar em `src/lib/dre/sync.ts` **e** em
   `scripts/sync-erp.mjs`.
-- Multiempresa: o schema já tem `empresas`, mas o app está fixado na HOFF
-  (`EMPRESA_ID = 1`).
+- Multiempresa: além da HOFF (`empresa_id 1`, filiais 1000–1024), o portal tem a
+  **LDK2** (ERP 2000) e a **DMCL** (ERP 4000) — imobiliárias, matrizes próprias no
+  ERP. A empresa é escolhida no seletor do topo e vale para todas as telas.
+  Cada uma tem plano de contas, de-para, orçamento e permissões próprios; o plano
+  é uma cópia do da HOFF (ver `022_empresas_ldk2_dmcl.sql` para replicar de novo
+  quando o plano mudar). Custo de Viagens e Auditoria seguem sendo da HOFF.

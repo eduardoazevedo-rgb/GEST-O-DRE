@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Figtree } from "next/font/google";
 import { AuthProvider } from "@/context/AuthContext";
+import { EmpresaProvider } from "@/context/EmpresaContext";
 import { ThemeProvider } from "@/context/ThemeContext";
 import { ToastProvider } from "@/context/ToastContext";
 import "./globals.css";
@@ -26,7 +27,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="h-full antialiased">
         <ThemeProvider>
           <AuthProvider>
-            <ToastProvider>{children}</ToastProvider>
+            <EmpresaProvider>
+              <ToastProvider>{children}</ToastProvider>
+            </EmpresaProvider>
           </AuthProvider>
         </ThemeProvider>
       </body>

@@ -5,6 +5,7 @@ import { ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MESES_CURTO, formatNumero, formatPct } from "@/lib/labels";
 import { buscarDre, dreEmCache } from "@/lib/dre-fetch";
+import { useEmpresa } from "@/context/EmpresaContext";
 import SeletorMeses from "@/components/SeletorMeses";
 import type { DreLinha, DreResposta } from "@/lib/types";
 
@@ -121,9 +122,11 @@ export default function DrePage() {
     [comparativoAnual, periodoAnosSorted, ano]
   );
 
+  const { empresaId } = useEmpresa();
+
   const carregar = useCallback(async () => {
     if (anosNecessarios.length === 0) { setDadosPorAno(new Map()); setCarregando(false); return; }
-    const cached = anosNecessarios.map((a) => [a, dreEmCache(a)] as const);
+    const cached = anosNecessarios.map((a) => [a, dreEmCache(a, null, empresaId)] as const);
     if (cached.every(([, d]) => d)) {
       setDadosPorAno(new Map(cached as [number, DreResposta][]));
       setCarregando(false);
@@ -131,7 +134,7 @@ export default function DrePage() {
     setErro("");
     try {
       const entradas = await Promise.all(
-        anosNecessarios.map(async (a) => [a, await buscarDre(a)] as const)
+        anosNecessarios.map(async (a) => [a, await buscarDre(a, null, empresaId)] as const)
       );
       setDadosPorAno(new Map(entradas));
     } catch (e) {
@@ -139,7 +142,7 @@ export default function DrePage() {
     } finally {
       setCarregando(false);
     }
-  }, [anosNecessarios]);
+  }, [anosNecessarios, empresaId]);
 
   useEffect(() => { carregar(); }, [carregar]);
 

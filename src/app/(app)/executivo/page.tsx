@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { MESES_CURTO, formatNumero, formatPct } from "@/lib/labels";
 import { kpisTopo, ponteResultado, valorPeriodo, ultimoMesComDado, margensNaturezaYoY, type Periodo, type KpiTriplo } from "@/lib/executivo";
 import { buscarDre, dreEmCache } from "@/lib/dre-fetch";
+import { useEmpresa } from "@/context/EmpresaContext";
 import type { DreResposta, DreLinha } from "@/lib/types";
 import PonteResultado from "@/components/executivo/PonteResultado";
 
@@ -23,14 +24,16 @@ export default function ExecutivoPage() {
   const [contaAnalise, setContaAnalise] = useState("RESULTADO");
   const [blocoChart, setBlocoChart] = useState<"merc" | "serv">("merc");
 
+  const { empresaId } = useEmpresa();
+
   const carregar = useCallback(async () => {
-    const cache = dreEmCache(ano);
+    const cache = dreEmCache(ano, null, empresaId);
     if (cache) { setDre(cache); setMes(ultimoMesComDado(cache)); setCarregando(false); } else setCarregando(true);
     setErro("");
     try {
       const [j1, j3] = await Promise.all([
-        buscarDre(ano),
-        buscarDre(ano - 1).catch(() => null),
+        buscarDre(ano, null, empresaId),
+        buscarDre(ano - 1, null, empresaId).catch(() => null),
       ]);
       setDre(j1);
       setAnterior(j3);
@@ -40,7 +43,7 @@ export default function ExecutivoPage() {
     } finally {
       setCarregando(false);
     }
-  }, [ano]);
+  }, [ano, empresaId]);
 
   useEffect(() => { carregar(); }, [carregar]);
 

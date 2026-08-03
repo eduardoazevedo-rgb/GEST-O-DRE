@@ -4,7 +4,13 @@ import type { DreLinha, DreResposta } from "@/lib/types";
 
 export const runtime = "nodejs";
 
-const EMPRESA_ID = 1;
+const EMPRESA_PADRAO = 1; // HOFF
+
+/** Empresa pedida na query. O acesso em si é garantido no banco (RLS/RPC). */
+function empresaDaQuery(searchParams: URLSearchParams): number {
+  const v = Number(searchParams.get("empresa") ?? EMPRESA_PADRAO);
+  return Number.isInteger(v) && v > 0 ? v : EMPRESA_PADRAO;
+}
 
 function segmentos(codigo: string): number[] {
   return codigo.split(".").map(Number);
@@ -47,6 +53,7 @@ export async function GET(req: NextRequest) {
   if (!user) return NextResponse.json({ error: "Não autorizado" }, { status: 401 });
 
   const { searchParams } = new URL(req.url);
+  const EMPRESA = empresaDaQuery(searchParams);
   const ano = Number(searchParams.get("ano") ?? new Date().getFullYear());
   const versaoParam = searchParams.get("versao");
   if (!Number.isInteger(ano) || ano < 2000 || ano > 2099) {
@@ -74,7 +81,7 @@ export async function GET(req: NextRequest) {
         supabase
           .from("plano_contas")
           .select("codigo, nome, nivel, natureza, exibir_dre")
-          .eq("empresa_id", EMPRESA_ID)
+          .eq("empresa_id", EMPRESA)
           .order("codigo")
           .range(de, ate)
       ),
@@ -82,13 +89,13 @@ export async function GET(req: NextRequest) {
         supabase
           .from("de_para_contas")
           .select("cd_classificacao_erp, codigo_gerencial")
-          .eq("empresa_id", EMPRESA_ID)
+          .eq("empresa_id", EMPRESA)
           .order("cd_classificacao_erp")
           .range(de, ate)
       ),
       unidade === null
-        ? supabase.rpc("dre_realizado_pivot", { p_empresa: EMPRESA_ID, p_ano: ano })
-        : supabase.rpc("dre_realizado_pivot_unidade", { p_empresa: EMPRESA_ID, p_ano: ano, p_filial: unidade }),
+        ? supabase.rpc("dre_realizado_pivot", { p_empresa: EMPRESA, p_ano: ano })
+        : supabase.rpc("dre_realizado_pivot_unidade", { p_empresa: EMPRESA, p_ano: ano, p_filial: unidade }),
     ]);
     if (realizadoRes.error) throw new Error(realizadoRes.error.message);
     planoData = planoTmp;
@@ -112,7 +119,7 @@ export async function GET(req: NextRequest) {
     const { data } = await supabase
       .from("orcamento_versoes")
       .select("id, nome")
-      .eq("empresa_id", EMPRESA_ID)
+      .eq("empresa_id", EMPRESA)
       .eq("ano", ano)
       .eq("ativa", true)
       .order("created_at", { ascending: false })

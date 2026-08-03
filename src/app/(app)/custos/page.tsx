@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { MESES_CURTO, formatNumero, formatPct } from "@/lib/labels";
 import type { DreLinha, DreResposta } from "@/lib/types";
 import { buscarDre, dreEmCache } from "@/lib/dre-fetch";
+import { useEmpresa } from "@/context/EmpresaContext";
 import SeletorMeses from "@/components/SeletorMeses";
 import type { CustoFornecedorResposta } from "@/app/api/custos/fornecedor/route";
 
@@ -210,6 +211,7 @@ function mergeDetalhes(rs: CustoFornecedorResposta[]): CustoFornecedorResposta {
 
 export default function CustosPage() {
   const anoAtual = new Date().getFullYear();
+  const { empresaId } = useEmpresa();
   const [ano, setAno] = useState(anoAtual);
   const [mesesSel, setMesesSel] = useState<number[]>([]); // vazio = ano todo
   const [unificar, setUnificar] = useState(true);
@@ -241,27 +243,27 @@ export default function CustosPage() {
   const [carregandoDet, setCarregandoDet] = useState<Set<string>>(new Set());
 
   const carregar = useCallback(async () => {
-    const cache = dreEmCache(ano, unidade);
+    const cache = dreEmCache(ano, unidade, empresaId);
     if (cache) { setDre(cache); setCarregando(false); } else setCarregando(true);
     setErro("");
     setDetalhe(new Map());
     setAbertosDet(new Set());
     setAbertosUnidade(new Set());
     try {
-      setDre(await buscarDre(ano, unidade));
+      setDre(await buscarDre(ano, unidade, empresaId));
     } catch (e) {
       setErro(e instanceof Error ? e.message : String(e));
     } finally {
       setCarregando(false);
     }
-  }, [ano, unidade]);
+  }, [ano, unidade, empresaId]);
 
   useEffect(() => { carregar(); }, [carregar]);
 
   // Unidades que o usuário enxerga, para o seletor.
   useEffect(() => {
     let vivo = true;
-    fetch(`/api/executivo/unidades?ano=${ano}`)
+    fetch(`/api/executivo/unidades?ano=${ano}&empresa=${empresaId}`)
       .then((r) => (r.ok ? r.json() : { unidades: [] }))
       .then((j: { unidades?: { cd_empresa_erp: number; nome: string }[] }) => {
         if (!vivo) return;
@@ -269,7 +271,7 @@ export default function CustosPage() {
       })
       .catch(() => { /* seletor fica só com "Todas" */ });
     return () => { vivo = false; };
-  }, [ano]);
+  }, [ano, empresaId]);
 
   const arvoreCompleta = useMemo(() => construirArvore(dre, unificar, modo), [dre, unificar, modo]);
   const { nos: arvore, forcados } = useMemo(() => filtrarArvore(arvoreCompleta, busca), [arvoreCompleta, busca]);
@@ -279,7 +281,7 @@ export default function CustosPage() {
     try {
       const respostas = await Promise.all(
         codigos.map(async (cod) => {
-          const res = await fetch(`/api/custos/fornecedor?ano=${ano}&codigo=${encodeURIComponent(cod)}`);
+          const res = await fetch(`/api/custos/fornecedor?ano=${ano}&empresa=${empresaId}&codigo=${encodeURIComponent(cod)}`);
           return res.ok ? ((await res.json()) as CustoFornecedorResposta) : { codigo: cod, unidades: [] };
         })
       );
@@ -287,7 +289,7 @@ export default function CustosPage() {
     } finally {
       setCarregandoDet((s) => { const n = new Set(s); n.delete(key); return n; });
     }
-  }, [ano]);
+  }, [ano, empresaId]);
 
   // Seta: abre os filhos; na folha, abre direto o detalhe por fornecedor.
   function alternarNo(no: No) {

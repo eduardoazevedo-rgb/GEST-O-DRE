@@ -20,8 +20,10 @@ interface LinhaErp {
   SALDO: number;
 }
 
+// Vazio = traz todas as filiais (2000 = LDK2 e 4000 = DMCL são empresas
+// próprias no portal desde a migração 022).
 function empresasExcluidas(): string {
-  const raw = process.env.FIREBIRD_EXCLUIR_EMPRESAS ?? "2000,4000";
+  const raw = process.env.FIREBIRD_EXCLUIR_EMPRESAS ?? "";
   const nums = raw
     .split(",")
     .map((s) => Number(s.trim()))
@@ -76,10 +78,17 @@ export async function sincronizarRealizado(ano: number): Promise<{ linhas: numbe
 
   const rows = await queryFirebird<LinhaErp>(sql);
 
+  // cd_empresa (ERP) → empresa_id (portal): 1000–1024 = HOFF, 2000 = LDK2, 4000 = DMCL.
+  const supabaseMapa = createAdminClient();
+  const { data: filiais, error: errFiliais } = await supabaseMapa.from("filiais").select("cd_empresa, empresa_id");
+  if (errFiliais) throw new Error(`Supabase (filiais): ${errFiliais.message}`);
+  const empresaDe = new Map((filiais ?? []).map((f) => [Number(f.cd_empresa), Number(f.empresa_id)]));
+  const empresaIds = [...new Set([EMPRESA_ID, ...empresaDe.values()])];
+
   const registros = rows
     .filter((r) => Number(r.SALDO) !== 0)
     .map((r) => ({
-      empresa_id: EMPRESA_ID,
+      empresa_id: empresaDe.get(Number(r.CD_EMPRESA)) ?? EMPRESA_ID,
       cd_empresa_erp: Number(r.CD_EMPRESA),
       competencia: `${r.ANO}-${String(r.MES).padStart(2, "0")}-01`,
       cd_conta_erp: Number(r.CONTA),
@@ -117,7 +126,7 @@ export async function sincronizarRealizado(ano: number): Promise<{ linhas: numbe
   const { error: delError } = await supabase
     .from("realizado_erp")
     .delete()
-    .eq("empresa_id", EMPRESA_ID)
+    .in("empresa_id", empresaIds)
     .gte("competencia", `${ano}-01-01`)
     .lte("competencia", `${ano}-12-31`);
   if (delError) throw new Error(`Supabase (delete): ${delError.message}`);

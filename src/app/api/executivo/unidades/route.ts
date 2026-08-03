@@ -3,7 +3,7 @@ import { createClient as createServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 
-const EMPRESA_ID = 1;
+const EMPRESA_PADRAO = 1; // HOFF
 
 interface LinhaUnidade {
   cd_empresa_erp: number;
@@ -29,13 +29,16 @@ export async function GET(req: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Não autorizado" }, { status: 401 });
 
-  const ano = Number(new URL(req.url).searchParams.get("ano") ?? new Date().getFullYear());
+  const { searchParams } = new URL(req.url);
+  const ano = Number(searchParams.get("ano") ?? new Date().getFullYear());
+  const empresaParam = Number(searchParams.get("empresa") ?? EMPRESA_PADRAO);
+  const empresa = Number.isInteger(empresaParam) && empresaParam > 0 ? empresaParam : EMPRESA_PADRAO;
   if (!Number.isInteger(ano) || ano < 2000 || ano > 2099) {
     return NextResponse.json({ error: "Ano inválido" }, { status: 400 });
   }
 
   const { data, error } = await supabase.rpc("dre_realizado_por_unidade", {
-    p_empresa: EMPRESA_ID,
+    p_empresa: empresa,
     p_ano: ano,
   });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
