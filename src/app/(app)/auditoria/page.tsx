@@ -18,6 +18,15 @@ interface No { key: string; nome: string; codigo?: string; qtd: number[]; vl: nu
 
 const soma = (v: number[]) => v.reduce((a, b) => a + b, 0);
 
+// EPI e uniforme entram no estoque como qualquer item, mas na auditoria de
+// inventário são ruído: viram um botão para o usuário decidir se quer vê-los.
+// Casam os 8 históricos "(+/-) ACERTO DE INVENTARIO - EPI|UNIFORMES (ADM|SERV)".
+const RE_EPI_UNIFORME = /\b(EPI|EPIS|UNIFORME|UNIFORMES)\b/;
+function ehEpiUniforme(historico: string | null): boolean {
+  if (!historico) return false;
+  return RE_EPI_UNIFORME.test(historico.normalize("NFD").replace(/\p{Diacritic}/gu, "").toUpperCase());
+}
+
 export default function AuditoriaPage() {
   const anoAtual = new Date().getFullYear();
   const supabase = useMemo(() => createClient(), []);
@@ -29,6 +38,7 @@ export default function AuditoriaPage() {
   const [fUnidade, setFUnidade] = useState<number | "">("");
   const [fHistorico, setFHistorico] = useState("");
   const [fTipo, setFTipo] = useState("");
+  const [ocultarEpi, setOcultarEpi] = useState(true);
   const [abertos, setAbertos] = useState<Set<string>>(new Set());
   const alternar = (k: string) => setAbertos((p) => { const n = new Set(p); if (n.has(k)) n.delete(k); else n.add(k); return n; });
 
@@ -57,11 +67,25 @@ export default function AuditoriaPage() {
   const val = (n: No) => n[metrica];
 
   const unidades = useMemo(() => [...new Set(dados.map((d) => d.cd_empresa).filter((v): v is number => v != null))].sort((a, b) => a - b), [dados]);
-  const historicos = useMemo(() => [...new Set(dados.map((d) => d.ds_historico).filter(Boolean) as string[])].sort(), [dados]);
+  // Com EPI/uniforme ocultos eles também somem da lista de históricos, para não
+  // dar para escolher um filtro que devolveria a tela vazia.
+  const historicos = useMemo(() => {
+    const todos = [...new Set(dados.map((d) => d.ds_historico).filter(Boolean) as string[])].sort();
+    return ocultarEpi ? todos.filter((h) => !ehEpiUniforme(h)) : todos;
+  }, [dados, ocultarEpi]);
 
   const filtrado = useMemo(() => dados.filter((d) =>
-    (fUnidade === "" || d.cd_empresa === fUnidade) && (!fHistorico || d.ds_historico === fHistorico) && (!fTipo || d.tp_operacao === fTipo)
-  ), [dados, fUnidade, fHistorico, fTipo]);
+    (fUnidade === "" || d.cd_empresa === fUnidade) && (!fHistorico || d.ds_historico === fHistorico) &&
+    (!fTipo || d.tp_operacao === fTipo) && (!ocultarEpi || !ehEpiUniforme(d.ds_historico))
+  ), [dados, fUnidade, fHistorico, fTipo, ocultarEpi]);
+
+  // Ocultar EPI/uniforme com um deles escolhido no filtro esvaziaria a tela.
+  function alternarEpi() {
+    setOcultarEpi((v) => {
+      if (!v && ehEpiUniforme(fHistorico)) setFHistorico("");
+      return !v;
+    });
+  }
 
   // KPIs
   const kpis = useMemo(() => {
@@ -139,7 +163,10 @@ export default function AuditoriaPage() {
       <div className="flex flex-wrap items-center gap-3">
         <div>
           <h1 className="text-xl font-bold text-[var(--text)]">Auditoria — Ajustes de Inventário</h1>
-          <p className="text-xs text-[var(--text-muted)]">Entradas e saídas por inventário (ops. 998/999) · valor e quantidade</p>
+          <p className="text-xs text-[var(--text-muted)]">
+            Entradas e saídas por inventário (ops. 998/999) · valor e quantidade
+            {ocultarEpi && " · sem os ajustes de EPI e uniformes"}
+          </p>
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <div className="flex rounded-lg border border-[var(--border)] bg-[var(--surface)] p-0.5">
@@ -151,6 +178,20 @@ export default function AuditoriaPage() {
               </button>
             ))}
           </div>
+          <button
+            onClick={alternarEpi}
+            title={ocultarEpi
+              ? "Mostrar de volta os ajustes de EPI e uniformes"
+              : "Tirar do relatório os ajustes com histórico de EPI e uniformes"}
+            className={cn(
+              "rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors",
+              ocultarEpi
+                ? "border-[var(--primary)] bg-[var(--primary)] text-white"
+                : "border-[var(--border)] bg-[var(--surface)] text-[var(--text-muted)] hover:text-[var(--text)]"
+            )}
+          >
+            {ocultarEpi ? "Sem EPI/uniformes •" : "Com EPI/uniformes"}
+          </button>
           <select value={fUnidade} onChange={(e) => setFUnidade(e.target.value === "" ? "" : Number(e.target.value))}
             className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5 text-xs text-[var(--text)]">
             <option value="">Todas as unidades</option>
