@@ -166,16 +166,30 @@ function normalizar(s: string): string {
 }
 
 // Filtro do campo de busca: mantém a conta que casa (com o conteúdo dela) e os
-// ancestrais de quem casa mais fundo — esses vão abertos (forcados) para o
-// resultado aparecer sem precisar clicar.
+// ancestrais de quem casa mais fundo — esses vêm abertos (forcados) para o
+// resultado aparecer sem precisar clicar, mas dá para fechar na mão.
+//
+// Entre aspas o termo vira busca EXATA: "manutencao" traz só a conta chamada
+// MANUTENCAO, enquanto manutencao (sem aspas) traz tudo que contém a palavra.
 function filtrarArvore(nos: No[], termo: string): { nos: No[]; forcados: Set<string> } {
-  const t = normalizar(termo.trim());
+  const bruto = termo.trim();
+  const exato = bruto.length >= 2 && /^["“”'].*["“”']$/.test(bruto);
+  const t = normalizar(exato ? bruto.slice(1, -1) : bruto).trim();
   const forcados = new Set<string>();
   if (!t) return { nos, forcados };
+  // No exato o código também vale (para achar "3.3.3.05" direto) e o sufixo
+  // (SERV)/(VEN)/(ADM) é ignorado, senão "manutencao" não acharia nada com a
+  // unificação desligada, onde a conta se chama MANUTENCAO (SERV).
+  const casa = (no: No) =>
+    exato
+      ? normalizar(no.nome).trim() === t
+        || normalizar(stripSufixo(no.nome)).trim() === t
+        || (no.codigo ?? "") === t
+      : normalizar(`${no.codigo ?? ""} ${no.nome}`).includes(t);
   const filtra = (lista: No[]): No[] => {
     const out: No[] = [];
     for (const no of lista) {
-      if (normalizar(`${no.codigo ?? ""} ${no.nome}`).includes(t)) { out.push(no); continue; }
+      if (casa(no)) { out.push(no); continue; }
       const filhos = filtra(no.filhos);
       if (filhos.length > 0) { forcados.add(no.key); out.push({ ...no, filhos }); }
     }
@@ -237,6 +251,9 @@ export default function CustosPage() {
   const [erro, setErro] = useState("");
 
   const [abertos, setAbertos] = useState<Set<string>>(new Set());
+  // Contas fechadas na mão. Durante a busca os pais de quem casou abrem sozinhos
+  // (forcados); sem registrar o fechamento explícito, o clique não teria efeito.
+  const [fechados, setFechados] = useState<Set<string>>(new Set());
   const [abertosDet, setAbertosDet] = useState<Set<string>>(new Set());
   const [abertosUnidade, setAbertosUnidade] = useState<Set<string>>(new Set());
   const [detalhe, setDetalhe] = useState<Map<string, CustoFornecedorResposta>>(new Map());
@@ -291,10 +308,16 @@ export default function CustosPage() {
     }
   }, [ano, empresaId]);
 
+  // Aberto = escolha do usuário; na ausência dela, o que a busca forçou.
+  function estaAberto(key: string): boolean {
+    return !fechados.has(key) && (abertos.has(key) || forcados.has(key));
+  }
   // Seta: abre os filhos; na folha, abre direto o detalhe por fornecedor.
   function alternarNo(no: No) {
     if (no.filhos.length === 0) { alternarDetalhe(no); return; }
-    setAbertos((prev) => { const n = new Set(prev); if (n.has(no.key)) n.delete(no.key); else n.add(no.key); return n; });
+    const aberto = estaAberto(no.key);
+    setAbertos((prev) => { const n = new Set(prev); if (aberto) n.delete(no.key); else n.add(no.key); return n; });
+    setFechados((prev) => { const n = new Set(prev); if (aberto) n.add(no.key); else n.delete(no.key); return n; });
   }
   // Ícone de fornecedor: detalhe consolidado da conta (a RPC agrega por prefixo).
   function alternarDetalhe(no: No) {
@@ -308,6 +331,7 @@ export default function CustosPage() {
   function alternarUnificar() {
     setUnificar((u) => !u);
     setAbertos(new Set());
+    setFechados(new Set());
     setAbertosDet(new Set());
     setAbertosUnidade(new Set());
     setDetalhe(new Map());
@@ -384,7 +408,7 @@ export default function CustosPage() {
     // O detalhe por unidade → fornecedor sai na folha, pela própria seta.
     const detalhavel = folha && no.codigosFonte.length > 0;
     const detAberto = abertosDet.has(no.key);
-    const filhosAbertos = !folha && (abertos.has(no.key) || forcados.has(no.key));
+    const filhosAbertos = !folha && estaAberto(no.key);
     const carregandoEste = carregandoDet.has(no.key);
 
     out.push(linhaMes({
@@ -490,7 +514,8 @@ export default function CustosPage() {
             <input
               value={busca}
               onChange={(e) => setBusca(e.target.value)}
-              placeholder="Buscar conta (ex.: manutenção)"
+              placeholder={'Buscar conta · "nome" = exato'}
+              title={'manutenção traz tudo que contém a palavra; "manutenção" traz só a conta com esse nome exato'}
               className="w-56 rounded-lg border border-[var(--border)] bg-[var(--surface)] py-1.5 pl-8 pr-7 text-sm text-[var(--text)] placeholder:text-[var(--text-muted)]"
             />
             {busca && (
