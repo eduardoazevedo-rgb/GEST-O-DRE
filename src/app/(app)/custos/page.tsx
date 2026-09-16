@@ -33,7 +33,7 @@ function temSufixo(nome: string): boolean {
 // drill de fornecedor (num nó unificado há mais de um: VEN + ADM). A RPC agrega
 // por prefixo, então num nó com filhos basta o próprio código.
 type No = {
-  key: string; nome: string; codigo?: string; nivel: number;
+  key: string; nome: string; nomeCompleto?: string; codigo?: string; nivel: number;
   realizado: number[]; planejado: number[]; filhos: No[]; codigosFonte: string[];
 };
 
@@ -47,6 +47,15 @@ const MODOS: { valor: Modo; rotulo: string }[] = [
   { valor: "desvio", rotulo: "Desvio" },
 ];
 
+// Grade em R$ mil: tira 3 dígitos de cada número sem mentir sobre os pequenos
+// (o que arredondaria para zero sai como "~0").
+function formatValor(v: number, milhares: boolean): string {
+  if (!milhares) return formatNumero(v);
+  const m = v / 1000;
+  if (v !== 0 && Math.abs(m) < 0.5) return "~0";
+  return formatNumero(m);
+}
+
 function desvioPct(realizado: number, planejado: number): number | null {
   if (planejado === 0) return null;
   return ((realizado - planejado) / Math.abs(planejado)) * 100;
@@ -55,26 +64,28 @@ function desvioPct(realizado: number, planejado: number): number | null {
 // Paleta da grade. Zebra e realce usam cores SÓLIDAS de propósito: a primeira
 // coluna é fixa e precisa cobrir os números que passam por baixo ao rolar — com
 // cor translúcida eles apareceriam através dela.
-const ZEBRA = "bg-gray-50 dark:bg-neutral-800";
+const ZEBRA = "bg-[#F1F2F6] dark:bg-neutral-800";
 const HOVER = "hover:bg-[#EDEDFA] dark:hover:bg-[#191934]";
 const HOVER_FIXA = "group-hover:bg-[#EDEDFA] dark:group-hover:bg-[#191934]";
 // Banda do mês: separador vertical no começo de cada bloco Plan./Real./Desv.
 const BORDA_MES = "border-l-2 border-slate-200 dark:border-slate-700";
+// Coluna Total: fecha a leitura da linha, então ganha borda e fundo próprios.
+const COL_TOTAL = "border-l-2 border-slate-300 bg-black/[0.03] dark:border-slate-600 dark:bg-white/[0.04]";
 // Azul da identidade + um tom vizinho, para alternar as faixas de mês no topo.
 const AZUL = "#0000C2";
 const AZUL_ALT = "#1A1AD1";
 
 // Trio Plan./Real./Desv. de um mês (ou do total) no modo comparativo.
-function blocoComparativo(p: number, r: number, chave: string, cel: string, mudo: boolean): ReactNode {
+function blocoComparativo(p: number, r: number, chave: string, cel: string, mudo: boolean, milhares: boolean): ReactNode {
   const d = desvioPct(r, p);
   const vazio = <span className="text-[var(--text-muted)]/40">–</span>;
   return (
     <Fragment key={chave}>
       <td className={cn(cel, BORDA_MES, "text-[var(--text-muted)]")}>
-        {p !== 0 ? formatNumero(p) : vazio}
+        {p !== 0 ? formatValor(p, milhares) : vazio}
       </td>
       <td className={cn(cel, r > 0 && "text-emerald-600 dark:text-emerald-400", mudo && "text-[var(--text-muted)]")}>
-        {r !== 0 ? formatNumero(r) : vazio}
+        {r !== 0 ? formatValor(r, milhares) : vazio}
       </td>
       <td className={cn(cel, "pr-3",
         d !== null && d >= 0 && "text-emerald-600 dark:text-emerald-400",
@@ -103,19 +114,32 @@ function valoresDoModo(no: No, modo: Modo): number[] {
   return no.realizado; // realizado e comparativo (neste, o plan. vai à parte)
 }
 
-// mostrarCodigo: no modo unificado as contas não têm um código único, então a
-// tela fica só com os nomes — inclusive nas que não foram agrupadas.
-function filhosNormais(linhas: DreLinha[], codigoPai: string, mostrarCodigo: boolean): No[] {
-  return linhas
-    .filter((l) => paiCod(l.codigo) === codigoPai)
-    .map((l) => noNormal(l, linhas, mostrarCodigo));
+// O ERP repete o nome do pai em cada filho ("CUSTO DE MERCADORIAS VENDIDAS -
+// PNEUS TB"). Ao abrir a conta isso vira uma coluna de texto repetido, então o
+// filho fica só com o que ele acrescenta ("PNEUS TB"). O nome inteiro continua
+// no title da linha.
+function semPrefixoDoPai(nome: string, pai: string): string {
+  const n = nome.trim(), pa = pai.trim();
+  if (!pa || n.length <= pa.length) return n;
+  if (!normalizar(n).startsWith(normalizar(pa))) return n;
+  const resto = n.slice(pa.length).replace(/^[s-–—:·]+/, "").trim();
+  return resto || n;
 }
 
-function noNormal(l: DreLinha, linhas: DreLinha[], mostrarCodigo: boolean): No {
+// mostrarCodigo: no modo unificado as contas não têm um código único, então a
+// tela fica só com os nomes — inclusive nas que não foram agrupadas.
+function filhosNormais(linhas: DreLinha[], codigoPai: string, mostrarCodigo: boolean, nomePai: string): No[] {
+  return linhas
+    .filter((l) => paiCod(l.codigo) === codigoPai)
+    .map((l) => noNormal(l, linhas, mostrarCodigo, nomePai));
+}
+
+function noNormal(l: DreLinha, linhas: DreLinha[], mostrarCodigo: boolean, nomePai?: string): No {
   return {
-    key: l.codigo, nome: l.nome, codigo: mostrarCodigo ? l.codigo : undefined,
+    key: l.codigo, nome: nomePai ? semPrefixoDoPai(l.nome, nomePai) : l.nome,
+    nomeCompleto: l.nome, codigo: mostrarCodigo ? l.codigo : undefined,
     nivel: l.nivel, realizado: l.realizado, planejado: l.planejado,
-    filhos: l.temFilhos ? filhosNormais(linhas, l.codigo, mostrarCodigo) : [],
+    filhos: l.temFilhos ? filhosNormais(linhas, l.codigo, mostrarCodigo, l.nome) : [],
     codigosFonte: [l.codigo],
   };
 }
@@ -140,7 +164,7 @@ function unificarSufixadas(n4: DreLinha[], linhas: DreLinha[], campoOrdem: "real
     }
     const filhos: No[] = [...gN5.entries()]
       .map(([bN5, ms]) => ({
-        key: `u|${base}|${bN5}`, nome: bN5, nivel: 5,
+        key: `u|${base}|${bN5}`, nome: semPrefixoDoPai(bN5, base), nomeCompleto: bN5, nivel: 5,
         realizado: somaArrays(ms.map((m) => m.realizado)),
         planejado: somaArrays(ms.map((m) => m.planejado)),
         filhos: [], codigosFonte: ms.map((m) => m.codigo),
@@ -247,6 +271,7 @@ export default function CustosPage() {
   const [unidades, setUnidades] = useState<{ cd: number; nome: string }[]>([]);
   const [busca, setBusca] = useState("");
   const [modoSel, setModoSel] = useState<Modo>("comparativo");
+  const [milhares, setMilhares] = useState(true);
   // O orçamento não tem quebra por unidade: com uma filial escolhida só o
   // realizado faz sentido, então a grade volta pra ele.
   const semOrcamento = unidade !== null;
@@ -306,6 +331,12 @@ export default function CustosPage() {
 
   const arvoreCompleta = useMemo(() => construirArvore(dre, unificar, modo), [dre, unificar, modo]);
   const { nos: arvore, forcados } = useMemo(() => filtrarArvore(arvoreCompleta, busca), [arvoreCompleta, busca]);
+  // Escala da barra de proporção: a maior conta N4 visível vale 100%.
+  const maiorTotal = useMemo(
+    () => Math.max(0, ...arvore.map((no) => Math.abs(somaVis(valoresDoModo(no, modo))))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [arvore, modo, mesesSel]
+  );
 
   const buscarDetalhe = useCallback(async (key: string, codigos: string[]) => {
     setCarregandoDet((s) => new Set(s).add(key));
@@ -359,6 +390,10 @@ export default function CustosPage() {
     corDesvio?: boolean;
     // Só no comparativo: o planejado que acompanha o realizado de `arr`.
     arrPlan?: number[];
+    // 0..1 — tamanho da barra de proporção na coluna Total (só contas N4).
+    barra?: number;
+    // Nome inteiro da conta, quando o exibido foi encurtado.
+    titulo?: string;
   }): ReactNode {
     const total = somaVis(opts.arr);
     const cel = "px-2 py-1.5 text-right tabular-nums whitespace-nowrap";
@@ -386,7 +421,7 @@ export default function CustosPage() {
             {opts.carregando ? <Loader2 size={13} className="animate-spin shrink-0" />
               : opts.expandivel ? (opts.aberto ? <ChevronDown size={13} className="shrink-0" /> : <ChevronRight size={13} className="shrink-0" />)
               : <span className="inline-block w-[13px] shrink-0" />}
-            <span className={cn(mudo && "text-[var(--text-muted)]")}>
+            <span className={cn(mudo && "text-[var(--text-muted)]")} title={opts.titulo ?? opts.nome}>
               {opts.codigoTag && <span className="text-[var(--text-muted)] mr-1">{opts.codigoTag}</span>}
               {opts.nome}
             </span>
@@ -394,8 +429,8 @@ export default function CustosPage() {
         </td>
         {comparativo ? (
           <>
-            {mesesVis.map((m) => blocoComparativo(opts.arrPlan?.[m] ?? 0, opts.arr[m] ?? 0, `m${m}`, cel, mudo))}
-            {mostrarTotal && blocoComparativo(somaVis(opts.arrPlan ?? []), total, "tot", cn(cel, "font-bold"), mudo)}
+            {mesesVis.map((m) => blocoComparativo(opts.arrPlan?.[m] ?? 0, opts.arr[m] ?? 0, `m${m}`, cel, mudo, milhares))}
+            {mostrarTotal && blocoComparativo(somaVis(opts.arrPlan ?? []), total, "tot", cn(cel, COL_TOTAL, "font-bold"), mudo, milhares)}
           </>
         ) : (
           <>
@@ -403,13 +438,18 @@ export default function CustosPage() {
               const v = opts.arr[m] ?? 0;
               return (
                 <td key={m} className={cn(cel, v !== 0 && corValor(v))}>
-                  {v !== 0 ? formatNumero(v) : <span className="text-[var(--text-muted)]/40">–</span>}
+                  {v !== 0 ? formatValor(v, milhares) : <span className="text-[var(--text-muted)]/40">–</span>}
                 </td>
               );
             })}
             {mostrarTotal && (
-              <td className={cn(cel, "border-l border-[var(--border)] font-bold", total !== 0 && corValor(total))}>
-                {formatNumero(total)}
+              <td className={cn(cel, COL_TOTAL, "relative font-bold", total !== 0 && corValor(total))}>
+                {/* Barra de proporção: só nas contas N4, para dar a escala de um olhar. */}
+                {opts.barra != null && opts.barra > 0 && (
+                  <div aria-hidden className="absolute inset-y-1 right-1 rounded-sm bg-[#0000C2]/[0.10] dark:bg-white/[0.10]"
+                    style={{ width: `${Math.max(2, Math.round(opts.barra * 100))}%` }} />
+                )}
+                <span className="relative">{formatValor(total, milhares)}</span>
               </td>
             )}
           </>
@@ -431,6 +471,10 @@ export default function CustosPage() {
       codigoTag: no.codigo ? `${no.codigo}.` : undefined,
       arr: valoresDoModo(no, modo), arrPlan: no.planejado,
       tipo: "conta", corDesvio: modo === "desvio", zebra: depth === 0 && zebra,
+      titulo: no.nomeCompleto,
+      barra: depth === 0 && maiorTotal > 0
+        ? Math.abs(somaVis(valoresDoModo(no, modo))) / maiorTotal
+        : undefined,
       expandivel: !folha || detalhavel,
       aberto: folha ? detAberto : filhosAbertos,
       carregando: folha && carregandoEste,
@@ -504,6 +548,7 @@ export default function CustosPage() {
           <p className="text-xs text-[var(--text-muted)]">
             Contas N4 de custo e despesa, da maior para a menor · abra a conta até a folha
             e destrinche por unidade → fornecedor
+            {milhares && <span className="font-medium"> · valores em R$ mil</span>}
             {modo !== "realizado" && (
               <> · orçamento: {dre?.versaoNome ?? "nenhuma versão ativa no ano"}</>
             )}
@@ -524,6 +569,18 @@ export default function CustosPage() {
               </button>
             ))}
           </div>
+          <button
+            onClick={() => setMilhares((v) => !v)}
+            title={milhares ? "Mostrar os valores cheios" : "Mostrar os valores em R$ mil"}
+            className={cn(
+              "rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors",
+              milhares
+                ? "border-[var(--primary)] bg-[var(--primary)] text-white"
+                : "border-[var(--border)] bg-[var(--surface)] text-[var(--text-muted)] hover:text-[var(--text)]"
+            )}
+          >
+            R$ mil {milhares ? "•" : ""}
+          </button>
           <div className="relative">
             <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" />
             <input
@@ -580,29 +637,31 @@ export default function CustosPage() {
 
       {erro && <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{erro}</div>}
 
-      <div className="overflow-x-auto rounded-xl border border-[var(--border)] bg-[var(--surface)]">
+      {/* max-h + overflow: a rolagem acontece DENTRO da tabela, que é o que
+          deixa o cabeçalho e a coluna de contas fixos enquanto se navega. */}
+      <div className="max-h-[calc(100vh-15rem)] min-h-64 overflow-auto rounded-xl border border-[var(--border)] bg-[var(--surface)]">
         <table className="min-w-full text-xs">
           <thead>
             <tr className="bg-[#0000C2] text-white">
-              <th rowSpan={comparativo ? 2 : 1} className="sticky left-0 z-10 bg-[#0000C2] px-3 py-2 text-left font-semibold min-w-64">
+              <th rowSpan={comparativo ? 2 : 1} className="sticky left-0 top-0 z-30 bg-[#0000C2] px-3 py-2 text-left font-semibold min-w-64">
                 Conta / Unidade / Fornecedor
               </th>
               {mesesVis.map((m, i) => (
                 <th key={m} colSpan={porMesCols}
-                  style={{ backgroundColor: i % 2 === 1 ? AZUL_ALT : AZUL }}
-                  className={cn("border-l-2 border-white/25 px-2 py-1.5 font-semibold", comparativo ? "text-center" : "text-right")}>
+                  style={{ backgroundColor: comparativo && i % 2 === 1 ? AZUL_ALT : AZUL }}
+                  className={cn("sticky top-0 z-20 border-l-2 border-white/25 px-2 py-1.5 font-semibold", comparativo ? "text-center" : "text-right")}>
                   {MESES_CURTO[m]}
                 </th>
               ))}
               {mostrarTotal && (
-                <th colSpan={porMesCols}
-                  className={cn("border-l border-white/20 px-2 py-1.5 font-semibold", comparativo ? "text-center" : "text-right")}>
+                <th colSpan={porMesCols} style={{ backgroundColor: AZUL }}
+                  className={cn("sticky top-0 z-20 border-l-2 border-white/40 px-2 py-1.5 font-semibold", comparativo ? "text-center" : "text-right")}>
                   Total
                 </th>
               )}
             </tr>
             {comparativo && (
-              <tr className="bg-[#0000C2] text-white/80">
+              <tr className="bg-[#0000C2] text-white/80 [&>th]:sticky [&>th]:top-8 [&>th]:z-20">
                 {mesesVis.map((m, i) => <MiniCabecalho key={m} alt={i % 2 === 1} />)}
                 {mostrarTotal && <MiniCabecalho />}
               </tr>
