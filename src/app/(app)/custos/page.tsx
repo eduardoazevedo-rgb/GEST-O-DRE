@@ -52,13 +52,25 @@ function desvioPct(realizado: number, planejado: number): number | null {
   return ((realizado - planejado) / Math.abs(planejado)) * 100;
 }
 
+// Paleta da grade. Zebra e realce usam cores SÓLIDAS de propósito: a primeira
+// coluna é fixa e precisa cobrir os números que passam por baixo ao rolar — com
+// cor translúcida eles apareceriam através dela.
+const ZEBRA = "bg-gray-50 dark:bg-neutral-800";
+const HOVER = "hover:bg-[#EDEDFA] dark:hover:bg-[#191934]";
+const HOVER_FIXA = "group-hover:bg-[#EDEDFA] dark:group-hover:bg-[#191934]";
+// Banda do mês: separador vertical no começo de cada bloco Plan./Real./Desv.
+const BORDA_MES = "border-l-2 border-slate-200 dark:border-slate-700";
+// Azul da identidade + um tom vizinho, para alternar as faixas de mês no topo.
+const AZUL = "#0000C2";
+const AZUL_ALT = "#1A1AD1";
+
 // Trio Plan./Real./Desv. de um mês (ou do total) no modo comparativo.
 function blocoComparativo(p: number, r: number, chave: string, cel: string, mudo: boolean): ReactNode {
   const d = desvioPct(r, p);
   const vazio = <span className="text-[var(--text-muted)]/40">–</span>;
   return (
     <Fragment key={chave}>
-      <td className={cn(cel, "border-l border-[var(--border)] text-[var(--text-muted)]")}>
+      <td className={cn(cel, BORDA_MES, "text-[var(--text-muted)]")}>
         {p !== 0 ? formatNumero(p) : vazio}
       </td>
       <td className={cn(cel, r > 0 && "text-emerald-600 dark:text-emerald-400", mudo && "text-[var(--text-muted)]")}>
@@ -74,12 +86,14 @@ function blocoComparativo(p: number, r: number, chave: string, cel: string, mudo
 }
 
 // Cabeçalho de baixo do modo comparativo: as três colunas de cada mês.
-function MiniCabecalho() {
+// alt = mês de faixa alternada (tom de azul vizinho).
+function MiniCabecalho({ alt }: { alt?: boolean }) {
+  const fundo = { backgroundColor: alt ? AZUL_ALT : AZUL };
   return (
     <>
-      <th className="border-l border-white/20 px-2 py-1 text-right font-normal">Plan.</th>
-      <th className="px-2 py-1 text-right font-normal">Real.</th>
-      <th className="px-2 py-1 pr-3 text-right font-normal">Desv.</th>
+      <th style={fundo} className="border-l-2 border-white/25 px-2 py-1 text-right font-normal">Plan.</th>
+      <th style={fundo} className="px-2 py-1 text-right font-normal">Real.</th>
+      <th style={fundo} className="px-2 py-1 pr-3 text-right font-normal">Desv.</th>
     </>
   );
 }
@@ -353,18 +367,19 @@ export default function CustosPage() {
     // Negrito dinâmico: as contas N4 (raiz do relatório) sempre; demais só quando expandidas.
     const negrito = contaRaiz || !!opts.aberto;
     const peso = negrito ? "font-bold" : opts.tipo === "unidade" ? "font-medium" : "font-normal";
-    // Separador mais marcado entre as contas N4; linha fina no detalhe.
-    const sep = contaRaiz ? "border-t-2 border-slate-300 dark:border-slate-600" : "border-t border-[var(--border)]";
-    // Zebra neutra só no fornecedor (cor sólida p/ a célula fixa cobrir o scroll).
-    const zebra = opts.tipo === "fornecedor" && opts.zebra;
-    const bgCel = zebra ? "bg-gray-50 dark:bg-neutral-800" : "bg-[var(--surface)]";
+    // Com a zebra separando as contas, a borda grossa virava ruído: fica fina.
+    const sep = contaRaiz ? "border-t border-slate-300 dark:border-slate-600" : "border-t border-[var(--border)]";
+    // Zebra nas contas N4 (alternada pela ordem na lista) e nos fornecedores.
+    const zebra = !!opts.zebra;
+    const bgCel = zebra ? ZEBRA : "bg-[var(--surface)]";
     const corValor = (v: number) =>
       v > 0 ? "text-emerald-600 dark:text-emerald-400"
         : opts.corDesvio ? "text-red-600 dark:text-red-400"
         : mudo ? "text-[var(--text-muted)]" : "text-[var(--text)]";
     return (
-      <tr key={opts.chave} className={cn(sep, peso, zebra && "bg-gray-50 dark:bg-neutral-800", "hover:bg-black/[0.02] dark:hover:bg-white/[0.03]")}>
-        <td className={cn("sticky left-0 z-10 whitespace-nowrap pr-3", bgCel)}
+      <tr key={opts.chave} className={cn("group", sep, peso, zebra && ZEBRA, HOVER)}>
+        {/* A sombra à direita descola a coluna fixa do resto quando se rola. */}
+        <td className={cn("sticky left-0 z-10 whitespace-nowrap pr-3 shadow-[2px_0_4px_rgba(0,0,0,0.05)]", bgCel, HOVER_FIXA)}
           style={{ paddingLeft: `${12 + opts.depth * 16}px` }}>
           <button onClick={opts.onToggle}
             className={cn("flex items-center gap-1 py-1.5 text-left", opts.expandivel ? "cursor-pointer" : "cursor-default")}>
@@ -403,7 +418,7 @@ export default function CustosPage() {
     );
   }
 
-  function renderNo(no: No, depth: number, out: ReactNode[]) {
+  function renderNo(no: No, depth: number, out: ReactNode[], zebra = false) {
     const folha = no.filhos.length === 0;
     // O detalhe por unidade → fornecedor sai na folha, pela própria seta.
     const detalhavel = folha && no.codigosFonte.length > 0;
@@ -415,7 +430,7 @@ export default function CustosPage() {
       chave: `n-${no.key}`, depth, nome: no.nome,
       codigoTag: no.codigo ? `${no.codigo}.` : undefined,
       arr: valoresDoModo(no, modo), arrPlan: no.planejado,
-      tipo: "conta", corDesvio: modo === "desvio",
+      tipo: "conta", corDesvio: modo === "desvio", zebra: depth === 0 && zebra,
       expandivel: !folha || detalhavel,
       aberto: folha ? detAberto : filhosAbertos,
       carregando: folha && carregandoEste,
@@ -477,7 +492,7 @@ export default function CustosPage() {
 
   function renderLinhas(): ReactNode[] {
     const out: ReactNode[] = [];
-    for (const no of arvore) renderNo(no, 0, out);
+    arvore.forEach((no, i) => renderNo(no, 0, out, i % 2 === 1));
     return out;
   }
 
@@ -572,9 +587,10 @@ export default function CustosPage() {
               <th rowSpan={comparativo ? 2 : 1} className="sticky left-0 z-10 bg-[#0000C2] px-3 py-2 text-left font-semibold min-w-64">
                 Conta / Unidade / Fornecedor
               </th>
-              {mesesVis.map((m) => (
+              {mesesVis.map((m, i) => (
                 <th key={m} colSpan={porMesCols}
-                  className={cn("border-l border-white/20 px-2 py-1.5 font-semibold", comparativo ? "text-center" : "text-right")}>
+                  style={{ backgroundColor: i % 2 === 1 ? AZUL_ALT : AZUL }}
+                  className={cn("border-l-2 border-white/25 px-2 py-1.5 font-semibold", comparativo ? "text-center" : "text-right")}>
                   {MESES_CURTO[m]}
                 </th>
               ))}
@@ -587,7 +603,7 @@ export default function CustosPage() {
             </tr>
             {comparativo && (
               <tr className="bg-[#0000C2] text-white/80">
-                {mesesVis.map((m) => <MiniCabecalho key={m} />)}
+                {mesesVis.map((m, i) => <MiniCabecalho key={m} alt={i % 2 === 1} />)}
                 {mostrarTotal && <MiniCabecalho />}
               </tr>
             )}
