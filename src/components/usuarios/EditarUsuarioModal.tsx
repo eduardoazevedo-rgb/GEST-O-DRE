@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Dices, X } from "lucide-react";
 import { userRoleOptions } from "@/lib/labels";
 import { cn } from "@/lib/utils";
-import { MODULOS, MODULOS_IDS, type ModuloId } from "@/lib/modulos";
+import { MODULOS, MODULOS_EXPLICITOS, MODULOS_IDS, type ModuloId } from "@/lib/modulos";
 import { useToast } from "@/context/ToastContext";
 import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
@@ -98,14 +98,26 @@ export default function EditarUsuarioModal({ usuario, isSelf, onClose }: Props) 
           {isSelf && <p className="text-xs text-[var(--text-muted)] -mt-2">Você não pode alterar o próprio perfil.</p>}
 
           {role === "admin" ? (
-            <p className="text-xs text-[var(--text-muted)]">Administradores enxergam todos os módulos e têm todas as permissões.</p>
+            <div className="space-y-2 rounded-lg border border-[var(--border)] p-3">
+              <p className="text-xs text-[var(--text-muted)]">
+                Administradores enxergam todos os módulos, exceto os que precisam de liberação individual:
+              </p>
+              {MODULOS.filter((m) => MODULOS_EXPLICITOS.includes(m.id)).map((m) => (
+                <label key={m.id} className="flex items-center gap-2 text-sm text-[var(--text)] cursor-pointer select-none">
+                  <input type="checkbox" checked={temModulo(m.id)} onChange={(e) => alternarModulo(m.id, e.target.checked)}
+                    className="h-4 w-4 rounded border-[var(--border)] accent-[var(--primary)]" />
+                  {m.label}
+                </label>
+              ))}
+            </div>
           ) : (
             <>
               <div className="space-y-2 rounded-lg border border-[var(--border)] p-3">
                 <div className="flex items-center justify-between">
                   <p className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">Módulos liberados</p>
                   <div className="flex gap-2 text-[11px]">
-                    <button type="button" onClick={() => setModulos([...MODULOS_IDS])}
+                    <button type="button" onClick={() => setModulos(MODULOS_IDS.filter((m) => !MODULOS_EXPLICITOS.includes(m)))}
+                      title="Marca todos, menos os de liberação individual (Fluxo de Caixa)"
                       className="text-[var(--primary)] hover:underline">todos</button>
                     <button type="button" onClick={() => { setModulos([]); setPodeImportarViagens(false); }}
                       className="text-[var(--text-muted)] hover:underline">nenhum</button>

@@ -10,7 +10,7 @@ import {
 import type { User } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/client";
 import type { UserRole } from "@/lib/types";
-import { MODULOS_IDS, type ModuloId } from "@/lib/modulos";
+import { MODULOS_EXPLICITOS, MODULOS_IDS, type ModuloId } from "@/lib/modulos";
 
 interface Profile {
   id: string;
@@ -18,6 +18,7 @@ interface Profile {
   role: UserRole;
   pode_sincronizar?: boolean;
   pode_importar_viagens?: boolean;
+  edita_premissas_fc?: boolean;
 }
 
 interface AuthContextValue {
@@ -30,6 +31,8 @@ interface AuthContextValue {
   /** Módulos liberados (admin = todos). */
   modulos: ModuloId[];
   podeVerModulo: (m: ModuloId) => boolean;
+  /** Edita premissas e saldo real do Fluxo de Caixa (permissão nominal, não vem com admin). */
+  editaPremissasFc: boolean;
   signOut: () => Promise<void>;
 }
 
@@ -42,6 +45,7 @@ const AuthContext = createContext<AuthContextValue>({
   podeImportarViagens: false,
   modulos: [],
   podeVerModulo: () => false,
+  editaPremissasFc: false,
   signOut: async () => {},
 });
 
@@ -56,7 +60,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const [{ data }, { data: mods }] = await Promise.all([
       supabase
         .from("profiles")
-        .select("id, nome, role, pode_sincronizar, pode_importar_viagens")
+        .select("id, nome, role, pode_sincronizar, pode_importar_viagens, edita_premissas_fc")
         .eq("id", userId)
         .single(),
       supabase.from("usuario_modulos").select("modulo").eq("user_id", userId),
@@ -110,8 +114,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isAdmin,
         podeSincronizar: isAdmin || profile?.pode_sincronizar === true,
         podeImportarViagens: (isAdmin || profile?.pode_importar_viagens === true) && (isAdmin || modulos.includes("viagens")),
-        modulos: isAdmin ? MODULOS_IDS : modulos,
-        podeVerModulo: (m) => isAdmin || modulos.includes(m),
+        // Admin vê tudo, menos os módulos explícitos — esses só com liberação própria.
+        modulos: isAdmin ? MODULOS_IDS.filter((m) => !MODULOS_EXPLICITOS.includes(m) || modulos.includes(m)) : modulos,
+        podeVerModulo: (m) => (isAdmin && !MODULOS_EXPLICITOS.includes(m)) || modulos.includes(m),
+        editaPremissasFc: profile?.edita_premissas_fc === true,
         signOut,
       }}
     >

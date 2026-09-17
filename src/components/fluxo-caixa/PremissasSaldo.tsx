@@ -135,7 +135,7 @@ export default function PremissasSaldo({ empresaId, premissas, saldos, lancament
           </div>
         ) : (
           <span className="ml-auto inline-flex items-center gap-1.5 rounded-md bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-800 dark:bg-amber-900/30 dark:text-amber-200">
-            <Lock size={12} /> Só administradores editam premissas e saldo real
+            <Lock size={12} /> Premissas e saldo real são editados só pelo responsável do fluxo de caixa
           </span>
         )}
       </div>

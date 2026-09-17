@@ -17,6 +17,13 @@ export type ModuloId = (typeof MODULOS)[number]["id"];
 
 export const MODULOS_IDS = MODULOS.map((m) => m.id) as ModuloId[];
 
+/**
+ * Módulos que NÃO vêm automaticamente com o perfil de administrador: precisam
+ * ser liberados usuário a usuário, inclusive para admin. Espelha a função
+ * user_tem_modulo() no banco (migração 026).
+ */
+export const MODULOS_EXPLICITOS: ModuloId[] = ["fluxo_caixa"];
+
 /** Sugestão ao criar um usuário novo: as abas de análise, sem as sensíveis. */
 export const MODULOS_PADRAO: ModuloId[] = ["executivo", "dre", "custos", "orcamento"];
 

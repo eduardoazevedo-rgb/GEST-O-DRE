@@ -41,7 +41,7 @@ function normalizar(l: LinhaBanco): Lancamento {
 export default function FluxoCaixaPage() {
   const supabase = useMemo(() => createClient(), []);
   const { empresaId, empresa } = useEmpresa();
-  const { isAdmin } = useAuth();
+  const { editaPremissasFc } = useAuth();
 
   const [aba, setAba] = useState<Aba>("visao");
   const [blocos, setBlocos] = useState<Bloco[]>([]);
@@ -148,7 +148,7 @@ export default function FluxoCaixaPage() {
           premissas={premissas}
           saldos={saldos}
           lancamentos={lancamentos}
-          podeEditar={isAdmin}
+          podeEditar={editaPremissasFc}
           onSalvo={carregar}
         />
       )}

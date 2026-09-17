@@ -6,7 +6,7 @@ import { Pencil, Link2, Power } from "lucide-react";
 import { userRoleLabel } from "@/lib/labels";
 import { useToast } from "@/context/ToastContext";
 import type { UserRole } from "@/lib/types";
-import { MODULOS_IDS, rotuloModulo, type ModuloId } from "@/lib/modulos";
+import { MODULOS_EXPLICITOS, MODULOS_IDS, rotuloModulo, type ModuloId } from "@/lib/modulos";
 import Badge from "@/components/ui/Badge";
 import ConfirmDialog from "@/components/ui/ConfirmDialog";
 import EditarUsuarioModal from "./EditarUsuarioModal";
@@ -114,7 +114,9 @@ export default function UsuariosTabela({ usuarios, currentUserId }: Props) {
                   {u.role === "admin" ? "Tudo (admin)" : resumoVinculos(u)}
                 </td>
                 <td className="px-4 py-3 text-[var(--text-muted)] hidden lg:table-cell max-w-56">
-                  {u.role === "admin" ? "Todos (admin)" : resumoModulos(u.modulos)}
+                  {u.role === "admin"
+                    ? (MODULOS_EXPLICITOS.every((m) => u.modulos.includes(m)) ? "Todos (admin)" : "Todos, exceto Fluxo de Caixa (admin)")
+                    : resumoModulos(u.modulos)}
                 </td>
                 <td className="px-4 py-3 text-[var(--text-muted)] hidden sm:table-cell">
                   {u.ultimoLogin ? new Date(u.ultimoLogin).toLocaleString("pt-BR") : "Nunca"}
