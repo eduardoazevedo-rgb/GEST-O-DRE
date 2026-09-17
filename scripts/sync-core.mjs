@@ -239,9 +239,8 @@ export async function sincronizarAjustes(supabase, fb, exc, ano) {
 export async function sincronizarTitulosFluxo(env, fb) {
   const EMPRESA_RENOVADORA = 1;
   const lado = `CASE WHEN T.TP_TIPOCONTA IN ('CR','CT','HR') THEN 'receber' ELSE 'pagar' END`;
-  // No lado receber só interessa o fornecedor nos créditos de fornecedor (24, 103):
-  // são bonificações da Bridgestone que o controle manual lança em Estratégicos.
-  const pessoa = `CASE WHEN T.TP_TIPOCONTA IN ('CR','CT','HR') AND C.CD_TIPOCONTA NOT IN (24, 103) THEN 0 ELSE COALESCE(C.CD_PESSOA, 0) END`;
+  // Cliente (receber) ou fornecedor (pagar): a aba Realizado lista por pessoa.
+  const pessoa = `COALESCE(C.CD_PESSOA, 0)`;
   const base = `FROM CONTAS C JOIN TIPOCONTA T ON T.CD_TIPOCONTA = C.CD_TIPOCONTA
      WHERE C.CD_EMPRESA BETWEEN 1000 AND 1024 AND C.ST_INCOBRAVEL = 'N'
        AND T.TP_TIPOCONTA IN ('CR','CT','HR','CP','HP')`;
@@ -272,6 +271,17 @@ export async function sincronizarTitulosFluxo(env, fb) {
     }
   }
 
+  // Nomes do cadastro de pessoas, só dos clientes/fornecedores que aparecem no resumo.
+  const usados = new Set(col.pessoa.filter((cd) => cd > 0));
+  const nomes = { cd: [], nome: [] };
+  for (const r of await fb.query("SELECT CD_PESSOA, NM_PESSOA FROM PESSOA")) {
+    const cd = Number(r.CD_PESSOA);
+    if (!usados.has(cd)) continue;
+    usados.delete(cd); // um nome por código
+    nomes.cd.push(cd);
+    nomes.nome.push(String(r.NM_PESSOA ?? "").trim() || `Pessoa ${cd}`);
+  }
+
   const ref = new URL(env.NEXT_PUBLIC_SUPABASE_URL).hostname.split(".")[0];
   const c = new pg.Client({
     host: "aws-1-us-east-2.pooler.supabase.com", port: 5432, user: `postgres.${ref}`,
@@ -285,6 +295,8 @@ export async function sincronizarTitulosFluxo(env, fb) {
       `insert into fc_erp_titulos_resumo (empresa_id, mes, situacao, lado, cd_tipoconta, cd_pessoa, qtd, valor)
        select $1, * from unnest($2::date[], $3::text[], $4::text[], $5::int[], $6::int[], $7::int[], $8::numeric[])`,
       [EMPRESA_RENOVADORA, col.mes, col.situacao, col.lado, col.tipo, col.pessoa, col.qtd, col.valor]);
+    await c.query("delete from fc_erp_pessoas");
+    await c.query("insert into fc_erp_pessoas (cd_pessoa, nome) select * from unnest($1::int[], $2::text[])", [nomes.cd, nomes.nome]);
     await c.query("commit");
   } catch (e) {
     await c.query("rollback").catch(() => {});

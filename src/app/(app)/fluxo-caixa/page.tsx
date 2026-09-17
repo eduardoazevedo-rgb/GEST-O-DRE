@@ -12,11 +12,13 @@ import ListaLancamentos from "@/components/fluxo-caixa/ListaLancamentos";
 import FormLancamento from "@/components/fluxo-caixa/FormLancamento";
 import PremissasSaldo from "@/components/fluxo-caixa/PremissasSaldo";
 import CruzamentoErp from "@/components/fluxo-caixa/CruzamentoErp";
+import RealizadoErp from "@/components/fluxo-caixa/RealizadoErp";
 
-type Aba = "visao" | "cruzamento" | "lancamentos" | "premissas";
+type Aba = "visao" | "cruzamento" | "realizado" | "lancamentos" | "premissas";
 const ABAS: { id: Aba; rotulo: string }[] = [
   { id: "visao", rotulo: "Visão" },
   { id: "cruzamento", rotulo: "Previsto × Sistema" },
+  { id: "realizado", rotulo: "Realizado" },
   { id: "lancamentos", rotulo: "Lançamentos" },
   { id: "premissas", rotulo: "Premissas e saldo real" },
 ];
@@ -144,6 +146,8 @@ export default function FluxoCaixaPage() {
         <VisaoFluxo blocos={blocos} lancamentos={lancamentos} premissas={premissas} saldos={saldos} onAbrir={abrir} />
       ) : aba === "cruzamento" ? (
         <CruzamentoErp empresaId={empresaId} lancamentos={lancamentos} premissas={premissas} />
+      ) : aba === "realizado" ? (
+        <RealizadoErp empresaId={empresaId} />
       ) : aba === "lancamentos" ? (
         <ListaLancamentos blocos={blocos} lancamentos={lancamentos} filiais={filiais} onAbrir={abrir} />
       ) : (
