@@ -6,6 +6,7 @@
 export const MODULOS = [
   { id: "executivo", label: "Executivo", href: "/executivo" },
   { id: "dre", label: "DRE", href: "/dre" },
+  { id: "fluxo_caixa", label: "Fluxo de Caixa", href: "/fluxo-caixa" },
   { id: "custos", label: "Análise de custos", href: "/custos" },
   { id: "viagens", label: "Custo de Viagens", href: "/viagens" },
   { id: "auditoria", label: "Auditoria", href: "/auditoria" },

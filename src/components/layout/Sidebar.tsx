@@ -15,6 +15,7 @@ import {
   Plane,
   ClipboardCheck,
   KeyRound,
+  Wallet,
   X,
 } from "lucide-react";
 import { useState } from "react";
@@ -28,6 +29,7 @@ import AlterarSenhaModal from "@/components/AlterarSenhaModal";
 const navItems: { href: string; label: string; icon: typeof Gauge; modulo?: ModuloId; adminOnly?: boolean }[] = [
   { href: "/executivo", label: "Executivo", icon: Gauge, modulo: "executivo" },
   { href: "/dre", label: "DRE", icon: Table2, modulo: "dre" },
+  { href: "/fluxo-caixa", label: "Fluxo de Caixa", icon: Wallet, modulo: "fluxo_caixa" },
   { href: "/custos", label: "Análise de custos", icon: Receipt, modulo: "custos" },
   { href: "/viagens", label: "Custo de Viagens", icon: Plane, modulo: "viagens" },
   { href: "/auditoria", label: "Auditoria", icon: ClipboardCheck, modulo: "auditoria" },
