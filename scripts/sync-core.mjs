@@ -12,6 +12,7 @@ const PROJ = "c:/Users/Administrator/Documents/GESTAO-DRE";
 const req = createRequire(PROJ + "/package.json");
 const Firebird = req("node-firebird");
 const { createClient } = req("@supabase/supabase-js");
+const pg = req("pg");
 
 // Empresa padrão (HOFF) — usada quando a filial do ERP não está cadastrada.
 export const EMPRESA_ID = 1;
@@ -228,6 +229,82 @@ export async function sincronizarAjustes(supabase, fb, exc, ano) {
   return registros.length;
 }
 
+// Títulos a pagar/receber (tabela CONTAS) resumidos para o cruzamento do Fluxo
+// de Caixa com o sistema. Regra do relatório de fluxo de caixa do ERP
+// (VIEW_FLUXOCAIXARFC010CC): receber = TP_TIPOCONTA CR/CT/HR, pagar = CP/HP;
+// fora incobráveis, adiantamentos, provisões, cancelados e status A (origem de
+// reparcelamento). Realizado = L pelo mês de liquidação (valor do documento);
+// em aberto = T/P pelo mês de vencimento (saldo). Só a renovadora (1000–1024).
+// Troca o resumo inteiro numa transação: a tela nunca vê a tabela pela metade.
+export async function sincronizarTitulosFluxo(env, fb) {
+  const EMPRESA_RENOVADORA = 1;
+  const lado = `CASE WHEN T.TP_TIPOCONTA IN ('CR','CT','HR') THEN 'receber' ELSE 'pagar' END`;
+  // No lado receber só interessa o fornecedor nos créditos de fornecedor (24, 103):
+  // são bonificações da Bridgestone que o controle manual lança em Estratégicos.
+  const pessoa = `CASE WHEN T.TP_TIPOCONTA IN ('CR','CT','HR') AND C.CD_TIPOCONTA NOT IN (24, 103) THEN 0 ELSE COALESCE(C.CD_PESSOA, 0) END`;
+  const base = `FROM CONTAS C JOIN TIPOCONTA T ON T.CD_TIPOCONTA = C.CD_TIPOCONTA
+     WHERE C.CD_EMPRESA BETWEEN 1000 AND 1024 AND C.ST_INCOBRAVEL = 'N'
+       AND T.TP_TIPOCONTA IN ('CR','CT','HR','CP','HP')`;
+  const realizado = await fb.query(`
+    SELECT EXTRACT(YEAR FROM C.DT_LIQUIDACAO) ANO, EXTRACT(MONTH FROM C.DT_LIQUIDACAO) MES, ${lado} LADO,
+           C.CD_TIPOCONTA, ${pessoa} CD_PESSOA, COUNT(*) QTD, SUM(C.VL_DOCUMENTO) VALOR
+      ${base} AND C.ST_CONTAS = 'L' AND C.DT_LIQUIDACAO >= '01.01.2025'
+     GROUP BY 1, 2, 3, 4, 5`);
+  const aberto = await fb.query(`
+    SELECT EXTRACT(YEAR FROM C.DT_VENCIMENTO) ANO, EXTRACT(MONTH FROM C.DT_VENCIMENTO) MES, ${lado} LADO,
+           C.CD_TIPOCONTA, ${pessoa} CD_PESSOA, COUNT(*) QTD, SUM(C.VL_SALDO) VALOR
+      ${base} AND C.ST_CONTAS IN ('T','P')
+     GROUP BY 1, 2, 3, 4, 5`);
+
+  const col = { mes: [], situacao: [], lado: [], tipo: [], pessoa: [], qtd: [], valor: [] };
+  for (const [situacao, rows] of [["realizado", realizado], ["aberto", aberto]]) {
+    for (const r of rows) {
+      const ladoTxt = String(r.LADO).trim();
+      const valor = Math.round(Number(r.VALOR) * 100) / 100;
+      if (!valor) continue;
+      col.mes.push(`${r.ANO}-${String(r.MES).padStart(2, "0")}-01`);
+      col.situacao.push(situacao);
+      col.lado.push(ladoTxt);
+      col.tipo.push(Number(r.CD_TIPOCONTA));
+      col.pessoa.push(Number(r.CD_PESSOA));
+      col.qtd.push(Number(r.QTD));
+      col.valor.push(ladoTxt === "pagar" ? -valor : valor);
+    }
+  }
+
+  const ref = new URL(env.NEXT_PUBLIC_SUPABASE_URL).hostname.split(".")[0];
+  const c = new pg.Client({
+    host: "aws-1-us-east-2.pooler.supabase.com", port: 5432, user: `postgres.${ref}`,
+    password: env.SUPABASE_DB_PASSWORD, database: "postgres", ssl: { rejectUnauthorized: false },
+  });
+  await c.connect();
+  try {
+    await c.query("begin");
+    await c.query("delete from fc_erp_titulos_resumo where empresa_id = $1", [EMPRESA_RENOVADORA]);
+    await c.query(
+      `insert into fc_erp_titulos_resumo (empresa_id, mes, situacao, lado, cd_tipoconta, cd_pessoa, qtd, valor)
+       select $1, * from unnest($2::date[], $3::text[], $4::text[], $5::int[], $6::int[], $7::int[], $8::numeric[])`,
+      [EMPRESA_RENOVADORA, col.mes, col.situacao, col.lado, col.tipo, col.pessoa, col.qtd, col.valor]);
+    await c.query("commit");
+  } catch (e) {
+    await c.query("rollback").catch(() => {});
+    throw e;
+  } finally {
+    await c.end();
+  }
+  return col.mes.length;
+}
+
+// Nas sincronizações agendadas o resumo do fluxo não pode derrubar o resto.
+async function sincronizarTitulosFluxoSeguro(fb) {
+  try {
+    const n = await sincronizarTitulosFluxo(carregarEnv(), fb);
+    console.log(`[sync] fluxo de caixa × ERP: ${n} linha(s) de resumo`);
+  } catch (e) {
+    console.warn(`[sync] aviso: resumo do fluxo de caixa não atualizado: ${e instanceof Error ? e.message : e}`);
+  }
+}
+
 // ---- Modos ----
 
 // full: reprocessa o ano inteiro (mês a mês, reaproveitando reprocessarMes).
@@ -251,6 +328,7 @@ export async function executarFull(supabase, fb, exc, ano) {
   });
   await refreshMV(supabase);
   await sincronizarAjustes(supabase, fb, exc, ano);
+  await sincronizarTitulosFluxoSeguro(fb);
   return { linhas: total, meses: 12, maxNr };
 }
 
@@ -294,5 +372,6 @@ export async function executarIncremental(supabase, fb, exc) {
   if (meses.length > 0) await refreshMV(supabase);
   // Ajustes de inventário: resincroniza o ano corrente (subconjunto pequeno).
   await sincronizarAjustes(supabase, fb, exc, new Date().getFullYear());
+  await sincronizarTitulosFluxoSeguro(fb);
   return { linhas: total, meses: meses.length, maxNr };
 }
