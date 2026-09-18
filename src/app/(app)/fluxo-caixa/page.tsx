@@ -99,7 +99,8 @@ export default function FluxoCaixaPage() {
   const abrir = useCallback((l: Lancamento) => setEditando(l), []);
 
   return (
-    <div className="space-y-4">
+    // A aba inteira em caixa alta (texto digitado é gravado como foi escrito).
+    <div className="space-y-4 uppercase">
       <div className="flex flex-wrap items-center gap-3">
         <div>
           <h1 className="text-xl font-bold text-[var(--text)]">Fluxo de Caixa</h1>

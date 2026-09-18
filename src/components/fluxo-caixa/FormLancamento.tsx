@@ -312,7 +312,7 @@ export default function FormLancamento({ empresaId, lancamento: l, blocos, filia
           </div>
 
           <div className="sm:col-span-6">
-            <label className={rotulo} htmlFor="fl-erp">Códigos no ERP <span className="normal-case tracking-normal font-normal">(opcional — para automatizar no futuro)</span></label>
+            <label className={rotulo} htmlFor="fl-erp">Códigos no ERP <span className="tracking-normal font-normal">(opcional — para automatizar no futuro)</span></label>
             <input id="fl-erp" className={cn(campo, "font-mono")} value={codigosErp} onChange={(e) => setCodigosErp(e.target.value)} placeholder="ex.: 1059213, 1059214" />
           </div>
           <div className="sm:col-span-6">
