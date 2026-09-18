@@ -98,6 +98,24 @@ export default function FluxoCaixaPage() {
 
   const abrir = useCallback((l: Lancamento) => setEditando(l), []);
 
+  // Linha criada direto na grade da Visão: vira um lançamento manual, com uma
+  // parcela por mês preenchido.
+  const criarLinha = useCallback(async (dados: { bloco_id: string; descricao: string; parcelas: { vencimento: string; valor: number }[] }) => {
+    const soma = dados.parcelas.reduce((s, p) => s + p.valor, 0);
+    const { error } = await supabase.rpc("fc_salvar_lancamento", {
+      p_lancamento: {
+        empresa_id: empresaId, bloco_id: dados.bloco_id, descricao: dados.descricao,
+        status: "previsto", tipo: soma >= 0 ? "entrada" : "saida", regra: "manual",
+        valor_total: Math.abs(Math.round(soma * 100) / 100),
+        primeiro_vencimento: dados.parcelas[0].vencimento,
+        n_parcelas: dados.parcelas.length, intervalo_meses: 1, origem: "Visão",
+      },
+      p_parcelas: dados.parcelas.map((p) => ({ ...p, ajustada: true })),
+    });
+    if (error) throw new Error(error.message);
+    await carregar();
+  }, [supabase, empresaId, carregar]);
+
   return (
     // A aba inteira em caixa alta (texto digitado é gravado como foi escrito).
     <div className="space-y-4 uppercase">
@@ -144,7 +162,7 @@ export default function FluxoCaixaPage() {
       {carregando && lancamentos.length === 0 ? (
         <p className="py-16 text-center text-sm text-[var(--text-muted)]">Carregando…</p>
       ) : aba === "visao" ? (
-        <VisaoFluxo blocos={blocos} lancamentos={lancamentos} premissas={premissas} saldos={saldos} onAbrir={abrir} />
+        <VisaoFluxo blocos={blocos} lancamentos={lancamentos} premissas={premissas} saldos={saldos} onAbrir={abrir} onCriar={criarLinha} />
       ) : aba === "cruzamento" ? (
         <CruzamentoErp empresaId={empresaId} lancamentos={lancamentos} premissas={premissas} />
       ) : aba === "realizado" ? (
