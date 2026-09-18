@@ -193,7 +193,7 @@ export default function PremissasSaldo({ empresaId, premissas, saldos, lancament
         </div>
       )}
       <p className="text-xs text-[var(--text-muted)]">
-        Valores em reais. Apague o conteúdo de uma célula para remover o valor daquele mês. O saldo real de um mês passa a ser o saldo inicial do mês seguinte na Visão.
+        Valores em reais. Apague o conteúdo de uma célula para remover o valor daquele mês. O saldo real de um mês passa a ser o saldo inicial do mês seguinte no Fluxo de Caixa Próprio.
       </p>
     </div>
   );

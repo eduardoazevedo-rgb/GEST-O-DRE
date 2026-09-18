@@ -16,7 +16,7 @@ import RealizadoErp from "@/components/fluxo-caixa/RealizadoErp";
 
 type Aba = "visao" | "cruzamento" | "realizado" | "lancamentos" | "premissas";
 const ABAS: { id: Aba; rotulo: string }[] = [
-  { id: "visao", rotulo: "Visão" },
+  { id: "visao", rotulo: "Fluxo de Caixa Próprio" },
   { id: "cruzamento", rotulo: "Previsto × Sistema" },
   { id: "realizado", rotulo: "Fluxo sistema" },
   { id: "lancamentos", rotulo: "Lançamentos" },
