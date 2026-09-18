@@ -1,10 +1,10 @@
 "use client";
 
-import { Fragment, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
-import { Check, ChevronDown, ChevronRight, Plus, X } from "lucide-react";
+import { Fragment, useMemo, useState, type ReactNode } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
-  PREMISSA_DO_BLOCO, calcularSaldos, formatGrade, lerValor, listarMeses, mesDe, rotuloMes, somarMeses,
+  PREMISSA_DO_BLOCO, calcularSaldos, formatGrade, listarMeses, mesDe, rotuloMes, somarMeses,
   type Bloco, type Lancamento, type Premissa, type SaldoReal,
 } from "@/lib/fluxo-caixa";
 
@@ -21,15 +21,13 @@ interface Props {
   premissas: Premissa[];
   saldos: SaldoReal[];
   onAbrir: (l: Lancamento) => void;
-  /** Cria uma linha direto na grade (bloco aberto → "+ nova linha"). */
-  onCriar?: (dados: { bloco_id: string; descricao: string; parcelas: { vencimento: string; valor: number }[] }) => Promise<void>;
 }
 
 const somaVis = (m: Map<string, number> | undefined, meses: string[]) =>
   meses.reduce((s, x) => s + (m?.get(x) ?? 0), 0);
 const somar = (mapa: Map<string, number>, mes: string, v: number) => mapa.set(mes, (mapa.get(mes) ?? 0) + v);
 
-export default function VisaoFluxo({ blocos, lancamentos, premissas, saldos, onAbrir, onCriar }: Props) {
+export default function VisaoFluxo({ blocos, lancamentos, premissas, saldos, onAbrir }: Props) {
   // Todos os meses com algum dado, para montar os seletores e o padrão.
   const mesesComDado = useMemo(() => {
     const s = new Set<string>();
@@ -51,9 +49,6 @@ export default function VisaoFluxo({ blocos, lancamentos, premissas, saldos, onA
   });
   const [milhares, setMilhares] = useState(true);
   const [abertos, setAbertos] = useState<Set<string>>(new Set());
-  const [novo, setNovo] = useState<{ bloco: string; descricao: string; valores: Record<string, string> } | null>(null);
-  const [salvando, setSalvando] = useState(false);
-  const [erroNovo, setErroNovo] = useState("");
 
   const meses = useMemo(() => (de <= ate ? listarMeses(de, ate) : []), [de, ate]);
 
@@ -88,77 +83,6 @@ export default function VisaoFluxo({ blocos, lancamentos, premissas, saldos, onA
     v == null || v === 0 ? vazio : (
       <span className={cn(cor && v > 0 && "text-emerald-600 dark:text-emerald-400")}>{formatGrade(v, milhares)}</span>
     );
-
-  // ---------- linha nova, digitada na própria grade ----------
-  const sinalDoBloco = (b: string) => (b === "recebimentos" ? 1 : -1);
-
-  function parcelasNovas(n: { bloco: string; valores: Record<string, string> }) {
-    const out: { vencimento: string; valor: number }[] = [];
-    for (const m of meses) {
-      const txt = (n.valores[m] ?? "").trim();
-      const v = lerValor(txt);
-      if (!v) continue;
-      // Sem sinal na frente vale o sentido do bloco: recebimento entra, o resto sai.
-      const explicito = txt.startsWith("-") || txt.startsWith("+");
-      out.push({ vencimento: m, valor: explicito ? v : Math.abs(v) * sinalDoBloco(n.bloco) });
-    }
-    return out;
-  }
-
-  function abrirNovo(bloco: string) {
-    setMilhares(false); // digitando em R$ cheio não há dúvida de escala
-    setErroNovo("");
-    setNovo({ bloco, descricao: "", valores: {} });
-  }
-
-  async function salvarNovo() {
-    if (!novo || !onCriar || salvando) return;
-    const parcelas = parcelasNovas(novo);
-    if (!novo.descricao.trim()) { setErroNovo("Dê um nome para a linha."); return; }
-    if (parcelas.length === 0) { setErroNovo("Preencha o valor de pelo menos um mês."); return; }
-    setSalvando(true); setErroNovo("");
-    try {
-      await onCriar({ bloco_id: novo.bloco, descricao: novo.descricao.trim(), parcelas });
-      setNovo({ bloco: novo.bloco, descricao: "", valores: {} }); // pronta para a próxima
-    } catch (e) {
-      setErroNovo(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSalvando(false);
-    }
-  }
-
-  function teclado(e: KeyboardEvent) {
-    if (e.key === "Enter") { e.preventDefault(); salvarNovo(); }
-    if (e.key === "Escape") { e.preventDefault(); setNovo(null); }
-  }
-
-  function linhaNova(b: Bloco) {
-    const n = novo!;
-    const campo = "w-full rounded border border-[var(--border)] bg-[var(--surface)] px-1.5 py-0.5 text-xs text-[var(--text)]";
-    const fundo = "bg-[#EEEEFD] dark:bg-[#1b1b3a]";
-    return (
-      <tr key={`n-${b.id}`} className={cn("border-t border-[var(--border)]", fundo)}>
-        <td className={cn("sticky left-0 z-10 py-1 pr-3 shadow-[2px_0_4px_rgba(0,0,0,0.05)]", fundo)} style={{ paddingLeft: 36 }}>
-          <div className="flex items-center gap-1">
-            <input autoFocus value={n.descricao} placeholder="Nome da linha" onKeyDown={teclado}
-              onChange={(e) => setNovo({ ...n, descricao: e.target.value })} className={cn(campo, "w-56")} />
-            <button onClick={salvarNovo} disabled={salvando} title="Salvar (Enter)"
-              className="rounded bg-[var(--primary)] p-1 text-white disabled:opacity-50"><Check size={12} /></button>
-            <button onClick={() => setNovo(null)} title="Cancelar (Esc)"
-              className="rounded border border-[var(--border)] p-1 text-[var(--text-muted)] hover:text-[var(--text)]"><X size={12} /></button>
-          </div>
-        </td>
-        {meses.map((m) => (
-          <td key={m} className="px-1 py-1">
-            <input value={n.valores[m] ?? ""} inputMode="decimal" placeholder="0" onKeyDown={teclado}
-              onChange={(e) => setNovo({ ...n, valores: { ...n.valores, [m]: e.target.value } })}
-              className={cn(campo, "text-right tabular-nums")} />
-          </td>
-        ))}
-        <td className={cn(cel, COL_TOTAL, "font-bold")}>{numero(parcelasNovas(n).reduce((s, p) => s + p.valor, 0))}</td>
-      </tr>
-    );
-  }
 
   function linhaFluxo(opts: {
     chave: string; nome: ReactNode; valores?: Map<string, number>; nivel: 0 | 1; zebra?: boolean;
@@ -220,27 +144,10 @@ export default function VisaoFluxo({ blocos, lancamentos, premissas, saldos, onA
         nome: <>{l.unidade && <span className="mr-1 text-[var(--text-muted)]/70">{l.unidade}</span>}{l.descricao}</>,
       }));
     }
-    if (!premissa && itens.length === 0 && novo?.bloco !== b.id) {
+    if (!premissa && itens.length === 0) {
       linhas.push(
         <tr key={`v-${b.id}`} className="border-t border-[var(--border)]">
           <td colSpan={meses.length + 2} className="py-2 pl-9 text-xs text-[var(--text-muted)]">Nenhum lançamento neste período.</td>
-        </tr>
-      );
-    }
-    if (!onCriar) return;
-    if (novo?.bloco === b.id) {
-      linhas.push(linhaNova(b));
-      if (erroNovo) linhas.push(
-        <tr key={`e-${b.id}`} className="border-t border-[var(--border)]">
-          <td colSpan={meses.length + 2} className="py-1 pl-9 text-xs text-red-600 dark:text-red-400">{erroNovo}</td>
-        </tr>
-      );
-    } else {
-      linhas.push(
-        <tr key={`+${b.id}`} onClick={() => abrirNovo(b.id)} className={cn("group cursor-pointer border-t border-[var(--border)]", HOVER)}>
-          <td colSpan={meses.length + 2} className="py-1.5 text-xs text-[var(--text-muted)] group-hover:text-[var(--primary)]" style={{ paddingLeft: 36 }}>
-            <span className="inline-flex items-center gap-1"><Plus size={12} /> nova linha</span>
-          </td>
         </tr>
       );
     }
@@ -334,9 +241,7 @@ export default function VisaoFluxo({ blocos, lancamentos, premissas, saldos, onA
       )}
       <p className="text-xs text-[var(--text-muted)]">
         Saldo inicial de cada mês: o real do mês anterior quando informado; senão, o previsto do anterior — a mesma regra da planilha.
-        Clique num bloco para abrir os itens e num item para editar. Dentro do bloco aberto, <b>+ nova linha</b> cria um lançamento
-        aqui mesmo: nome, valor nos meses e Enter para salvar (Esc cancela). O valor entra em R$ cheios, com o sinal do bloco —
-        digite <b>+</b> ou <b>−</b> na frente para inverter.
+        Clique num bloco para abrir os itens e num item para editar.
       </p>
     </div>
   );
