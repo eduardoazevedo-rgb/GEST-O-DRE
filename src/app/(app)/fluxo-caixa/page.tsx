@@ -16,7 +16,7 @@ import RealizadoErp from "@/components/fluxo-caixa/RealizadoErp";
 
 type Aba = "visao" | "cruzamento" | "realizado" | "lancamentos" | "premissas";
 const ABAS: { id: Aba; rotulo: string }[] = [
-  { id: "visao", rotulo: "Fluxo de Caixa Próprio" },
+  { id: "visao", rotulo: "Fluxo próprio" },
   { id: "cruzamento", rotulo: "Previsto × Sistema" },
   { id: "realizado", rotulo: "Fluxo sistema" },
   { id: "lancamentos", rotulo: "Lançamentos" },
@@ -98,7 +98,7 @@ export default function FluxoCaixaPage() {
 
   const abrir = useCallback((l: Lancamento) => setEditando(l), []);
 
-  // Linha criada direto na grade da Visão: vira um lançamento manual, com uma
+  // Linha criada direto na grade do Fluxo próprio: vira um lançamento manual, com uma
   // parcela por mês preenchido.
   const criarLinha = useCallback(async (dados: { bloco_id: string; descricao: string; parcelas: { vencimento: string; valor: number }[] }) => {
     const soma = dados.parcelas.reduce((s, p) => s + p.valor, 0);
@@ -108,7 +108,7 @@ export default function FluxoCaixaPage() {
         status: "previsto", tipo: soma >= 0 ? "entrada" : "saida", regra: "manual",
         valor_total: Math.abs(Math.round(soma * 100) / 100),
         primeiro_vencimento: dados.parcelas[0].vencimento,
-        n_parcelas: dados.parcelas.length, intervalo_meses: 1, origem: "Visão",
+        n_parcelas: dados.parcelas.length, intervalo_meses: 1, origem: "Fluxo próprio",
       },
       p_parcelas: dados.parcelas.map((p) => ({ ...p, ajustada: true })),
     });
