@@ -18,7 +18,7 @@ type Aba = "visao" | "cruzamento" | "realizado" | "lancamentos" | "premissas";
 const ABAS: { id: Aba; rotulo: string }[] = [
   { id: "visao", rotulo: "Visão" },
   { id: "cruzamento", rotulo: "Previsto × Sistema" },
-  { id: "realizado", rotulo: "Realizado" },
+  { id: "realizado", rotulo: "Fluxo sistema" },
   { id: "lancamentos", rotulo: "Lançamentos" },
   { id: "premissas", rotulo: "Premissas e saldo real" },
 ];
