@@ -32,7 +32,9 @@ const BLOCO_DA_LINHA = new Map([
   ...faixa(50, 57).map((l) => [l, "ssma"]),
   ...faixa(47, 48).map((l) => [l, "seguros"]),
   ...faixa(182, 185).map((l) => [l, "financiamentos"]),
-  ...[4, 28, 29, 30, ...faixa(187, 193), 200, 201].map((l) => [l, "pessoal_tributos"]),
+  ...[4, 29, 30, ...faixa(189, 192)].map((l) => [l, "pessoal"]),
+  ...[28, 187, 193, 200].map((l) => [l, "tributos"]),
+  ...[186, 188, 201].map((l) => [l, "fornecedores"]), // auditoria EY, quebra de fechamento
 ]);
 const LINHA_FORNECEDORES = 3, LINHA_CLIENTES = 202, LINHA_PREVISTO = 203, LINHA_REAL = 204;
 

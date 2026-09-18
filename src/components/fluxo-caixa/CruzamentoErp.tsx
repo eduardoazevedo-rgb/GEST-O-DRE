@@ -12,7 +12,7 @@ import {
 // correspondente no ERP (a regra de cada grupo está em fc_cruzamento_erp).
 const GRUPOS = [
   { id: "recebimentos", rotulo: "Recebimentos de clientes", blocos: ["recebimentos"], erp: "Títulos a receber: contas, cartão e cheque" },
-  { id: "fornecedores", rotulo: "Fornecedores gerais", blocos: ["fornecedores", "seguros", "pessoal_tributos"], erp: "Contas a pagar, fora os grupos abaixo" },
+  { id: "fornecedores", rotulo: "Fornecedores gerais", blocos: ["fornecedores", "seguros", "pessoal", "tributos"], erp: "Contas a pagar, fora os grupos abaixo" },
   { id: "estrategicos", rotulo: "Fornecedores estratégicos", blocos: ["estrategicos"], erp: "Fornecedores com código no campo \"Códigos no ERP\" dos lançamentos" },
   { id: "financiamentos", rotulo: "Financiamentos", blocos: ["financiamentos"], erp: "Empréstimos (tipos 18, 19) e consórcios (41 a 43)" },
   { id: "investimentos", rotulo: "Investimentos, veículos e SSMA", blocos: ["investimentos", "veiculos", "ssma"], erp: "Contas a pagar – imobilizado (tipo 34)" },
