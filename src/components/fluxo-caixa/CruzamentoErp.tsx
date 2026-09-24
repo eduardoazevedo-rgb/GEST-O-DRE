@@ -27,7 +27,7 @@ const TOLERANCIA = 0.05; // ±5%: dentro disso a previsão é considerada aderen
 const POR_PAGINA = 20;   // clientes/fornecedores por vez ao abrir um grupo
 
 interface LinhaErp { mes: string; grupo: GrupoId; situacao: "realizado" | "aberto"; qtd: number; valor: number }
-interface PessoaErp { cd_pessoa: number; nome: string; lado: "receber" | "pagar"; valores: Map<string, number> }
+interface PessoaErp { cd_pessoa: number; nome: string; lado: "receber" | "pagar"; valores: Map<string, number>; previsto?: boolean }
 interface PessoasGrupo { linhas: PessoaErp[]; total: number; carregando: boolean }
 
 interface Props {
@@ -56,6 +56,7 @@ export default function CruzamentoErp({ empresaId, lancamentos, premissas }: Pro
   const [abertos, setAbertos] = useState<Set<GrupoId>>(new Set());
   const chavePessoas = `${empresaId}|${de}|${ate}`;
   const [carregados, setCarregados] = useState<{ chave: string; grupos: Partial<Record<GrupoId, PessoasGrupo>> }>({ chave: "", grupos: {} });
+  const [nomesPrevisto, setNomesPrevisto] = useState<Map<number, string>>(new Map());
   const pessoas = carregados.chave === chavePessoas ? carregados.grupos : {};
 
   const meses = useMemo(() => (de <= ate ? listarMeses(de, ate) : []), [de, ate]);
@@ -103,6 +104,32 @@ export default function CruzamentoErp({ empresaId, lancamentos, premissas }: Pro
     return m;
   }, [lancamentos, premissas]);
 
+  // Previsto por fornecedor: as linhas do controle manual que apontam alguém do ERP.
+  const previstoPessoa = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const l of lancamentos) {
+      if (l.status === "cancelado" || l.cd_pessoa == null) continue;
+      for (const p of l.parcelas) {
+        const k = `${l.cd_pessoa}|${mesDe(p.vencimento)}`;
+        m.set(k, (m.get(k) ?? 0) + p.valor);
+      }
+    }
+    return m;
+  }, [lancamentos]);
+
+  // Fornecedores com linha no previsto, por grupo — sempre aparecem ao abrir.
+  const pessoasDoGrupo = useMemo(() => {
+    const m = new Map<GrupoId, number[]>();
+    for (const l of lancamentos) {
+      if (l.status === "cancelado" || l.cd_pessoa == null) continue;
+      const g = GRUPO_DO_BLOCO.get(l.bloco_id);
+      if (!g) continue;
+      const atual = m.get(g) ?? [];
+      if (!atual.includes(l.cd_pessoa)) m.set(g, [...atual, l.cd_pessoa]);
+    }
+    return m;
+  }, [lancamentos]);
+
   // Sistema: mês passado = realizado; mês atual = realizado + ainda em aberto no mês; futuro = já lançado.
   const sistema = useMemo(() => {
     const m = new Map<string, number>();
@@ -121,29 +148,56 @@ export default function CruzamentoErp({ empresaId, lancamentos, premissas }: Pro
       const base = c.chave === k ? c.grupos : {};
       return { chave: k, grupos: { ...base, [g]: { linhas: base[g]?.linhas ?? [], total: base[g]?.total ?? 0, carregando: true } } };
     });
-    const { data, error } = await supabase.rpc("fc_erp_grupo_pessoas", {
-      p_empresa: empresaId, p_de: de, p_ate: ate, p_grupo: g, p_busca: null, p_limite: POR_PAGINA, p_offset: offset,
-    });
-    if (error) {
-      setErro(error.message);
+    const alvo = offset === 0 ? (pessoasDoGrupo.get(g) ?? []) : [];
+    const [topo, doPrevisto] = await Promise.all([
+      supabase.rpc("fc_erp_grupo_pessoas", {
+        p_empresa: empresaId, p_de: de, p_ate: ate, p_grupo: g, p_busca: null, p_limite: POR_PAGINA, p_offset: offset,
+      }),
+      alvo.length
+        ? supabase.rpc("fc_erp_grupo_pessoas", {
+            p_empresa: empresaId, p_de: de, p_ate: ate, p_grupo: g, p_busca: null, p_limite: 500, p_offset: 0, p_pessoas: alvo,
+          })
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+    const falha = topo.error ?? doPrevisto.error;
+    if (falha) {
+      setErro(falha.message);
       setCarregados((c) => (c.chave !== k || !c.grupos[g] ? c : { chave: k, grupos: { ...c.grupos, [g]: { ...c.grupos[g]!, carregando: false } } }));
       return;
     }
-    const linhas = (data ?? []) as Record<string, unknown>[];
+    const converter = (linhas: Record<string, unknown>[], previsto: boolean) => linhas.map((x) => ({
+      cd_pessoa: Number(x.cd_pessoa), nome: String(x.nome), lado: x.lado as PessoaErp["lado"], previsto,
+      valores: new Map(Object.entries((x.valores ?? {}) as Record<string, number | string>).map(([m, v]) => [m, Number(v)])),
+    }));
+    const linhas = (topo.data ?? []) as Record<string, unknown>[];
+    const fixas = converter((doPrevisto.data ?? []) as Record<string, unknown>[], true);
+    // Fornecedor com previsto e sem nenhum título no ERP: entra zerado, para a
+    // diferença aparecer em vez de sumir da tela.
+    const semTitulo = alvo
+      .filter((cd) => !fixas.some((p) => p.cd_pessoa === cd))
+      .map((cd) => ({ cd_pessoa: cd, nome: nomesPrevisto.get(cd) ?? `Pessoa ${cd}`, lado: "pagar" as const, previsto: true, valores: new Map<string, number>() }));
+
     setCarregados((c) => {
       if (c.chave !== k) return c;
       const atual = c.grupos[g];
-      const novas = linhas.map((x) => ({
-        cd_pessoa: Number(x.cd_pessoa), nome: String(x.nome), lado: x.lado as PessoaErp["lado"],
-        valores: new Map(Object.entries((x.valores ?? {}) as Record<string, number | string>).map(([m, v]) => [m, Number(v)])),
-      }));
+      const anteriores = offset === 0 ? [] : atual?.linhas ?? [];
+      const doTopo = converter(linhas, false);
+      const juntas = offset === 0 ? [...fixas, ...semTitulo, ...doTopo] : [...anteriores, ...doTopo];
+      // Sem repetir quem já veio como fornecedor do previsto.
+      const vistos = new Set<string>();
+      const linhasFinais = juntas.filter((p) => {
+        const id = `${p.cd_pessoa}|${p.lado}`;
+        if (vistos.has(id)) return false;
+        vistos.add(id);
+        return true;
+      });
       return {
         chave: k,
         grupos: {
           ...c.grupos,
           [g]: {
-            linhas: [...(offset === 0 ? [] : atual?.linhas ?? []), ...novas],
-            total: linhas[0] ? Number(linhas[0].total_pessoas) : (offset === 0 ? 0 : atual?.total ?? 0),
+            linhas: linhasFinais,
+            total: linhas[0] ? Number(linhas[0].total_pessoas) : (offset === 0 ? fixas.length : atual?.total ?? 0),
             carregando: false,
           },
         },
@@ -157,6 +211,19 @@ export default function CruzamentoErp({ empresaId, lancamentos, premissas }: Pro
     if (abrir && !pessoas[g]) carregarGrupo(g, 0);
   }
 
+  // Nomes dos fornecedores apontados nas linhas do previsto.
+  useEffect(() => {
+    const cds = [...new Set(lancamentos.filter((l) => l.cd_pessoa != null).map((l) => l.cd_pessoa as number))];
+    if (cds.length === 0) { setNomesPrevisto(new Map()); return; }
+    let vivo = true;
+    supabase.from("fc_erp_pessoas").select("cd_pessoa, nome").in("cd_pessoa", cds)
+      .then(({ data }) => {
+        if (!vivo) return;
+        setNomesPrevisto(new Map(((data ?? []) as { cd_pessoa: number; nome: string }[]).map((p) => [Number(p.cd_pessoa), p.nome])));
+      });
+    return () => { vivo = false; };
+  }, [supabase, lancamentos]);
+
   // Trocou o período: recarrega os grupos que estão abertos.
   useEffect(() => {
     if (empresaId !== 1 || de > ate) return;
@@ -164,27 +231,19 @@ export default function CruzamentoErp({ empresaId, lancamentos, premissas }: Pro
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chavePessoas]);
 
-  // Linha de um cliente/fornecedor: só a coluna do sistema tem valor.
-  function linhaPessoa(chave: string, nome: ReactNode, valores: Map<string, number>, onClick?: () => void) {
-    const cel = "px-2 py-1 text-right tabular-nums whitespace-nowrap";
-    const vazio = <span className="text-[var(--text-muted)]/40">–</span>;
+  // Linha de um cliente/fornecedor: previsto vem das linhas com esse fornecedor.
+  function linhaPessoa(chave: string, nome: ReactNode, valores: Map<string, number>, cd: number | null, onClick?: () => void) {
     return (
       <tr key={chave} onClick={onClick}
         className={cn("group border-t border-[var(--border)] hover:bg-[#EDEDFA] dark:hover:bg-[#191934]", onClick && "cursor-pointer")}>
         <td className="sticky left-0 z-10 max-w-[22rem] truncate whitespace-nowrap bg-[var(--surface)] py-1 pl-8 pr-3 text-[var(--text-muted)] shadow-[2px_0_4px_rgba(0,0,0,0.05)] group-hover:bg-[#EDEDFA] dark:group-hover:bg-[#191934]">
           {nome}
         </td>
-        {meses.map((mes, i) => {
-          const zebra = i % 2 === 1 && "bg-black/[0.015] dark:bg-white/[0.02]";
-          const v = valores.get(mes) ?? 0;
-          return (
-            <Fragment key={mes}>
-              <td className={cn(cel, "border-l-2 border-slate-200 dark:border-slate-700", zebra)} />
-              <td className={cn(cel, zebra)}>{v ? formatGrade(v, milhares) : vazio}</td>
-              <td className={cn(cel, "pr-3", zebra)} />
-            </Fragment>
-          );
-        })}
+        {celulasValores(
+          (mes) => (cd == null ? 0 : previstoPessoa.get(`${cd}|${mes}`) ?? 0),
+          (mes) => valores.get(mes) ?? 0,
+          false, true,
+        )}
       </tr>
     );
   }
@@ -196,12 +255,16 @@ export default function CruzamentoErp({ empresaId, lancamentos, premissas }: Pro
     const fora: ReactNode[] = lista.map((p) => linhaPessoa(
       `pe-${g.id}-${p.cd_pessoa}-${p.lado}`,
       <>
-        <span className="mr-1 tabular-nums opacity-70">{p.cd_pessoa}</span>{p.nome}
+        <span className="mr-1 tabular-nums opacity-70">{p.cd_pessoa}</span>
+        <span className={cn(p.previsto && "font-semibold text-[var(--text)]")}>{p.nome}</span>
+        {p.previsto && (
+          <span className="ml-1.5 rounded bg-[#EEEEFD] px-1 text-[9px] font-bold uppercase text-[#0000C2] dark:bg-[#262f6b] dark:text-[#c7c9ff]">previsto</span>
+        )}
         {g.id === "estrategicos" && p.lado === "receber" && (
           <span className="ml-1.5 rounded bg-emerald-100 px-1 text-[9px] font-bold uppercase text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-200">crédito</span>
         )}
       </>,
-      p.valores,
+      p.valores, p.cd_pessoa,
     ));
     if (!pg || (pg.carregando && lista.length === 0)) {
       fora.push(
@@ -213,9 +276,10 @@ export default function CruzamentoErp({ empresaId, lancamentos, premissas }: Pro
       );
       return fora;
     }
-    const faltam = pg.total - lista.length;
+    const doTopo = lista.filter((p) => !p.previsto).length;
+    const faltam = pg.total - doTopo;
     if (faltam > 0) {
-      // O restante do grupo, para a soma das linhas fechar com o total.
+      // O restante do grupo, para as linhas fecharem com o total.
       const resto = new Map<string, number>();
       for (const m of meses) {
         const total = sistema.get(`${g.id}|${m}`) ?? 0;
@@ -228,9 +292,9 @@ export default function CruzamentoErp({ empresaId, lancamentos, premissas }: Pro
             {pg.carregando ? <Loader2 size={10} className="inline animate-spin" /> : `+ ${Math.min(POR_PAGINA, faltam)}`}
           </span>
         </span>,
-        resto,
-        () => { if (!pg.carregando) carregarGrupo(g.id, lista.length); }));
-    } else if (pg.total === 0) {
+        resto, null,
+        () => { if (!pg.carregando) carregarGrupo(g.id, doTopo); }));
+    } else if (lista.length === 0) {
       fora.push(
         <tr key={`v-${g.id}`} className="border-t border-[var(--border)]">
           <td colSpan={meses.length * 3 + 1} className="py-2 pl-8 text-xs text-[var(--text-muted)]">Nenhum título do ERP neste grupo e período.</td>
@@ -241,10 +305,18 @@ export default function CruzamentoErp({ empresaId, lancamentos, premissas }: Pro
   }
 
   function celulas(chaveGrupo: (mes: string) => string[], negrito = false) {
+    return celulasValores(
+      (mes) => chaveGrupo(mes).reduce((acc, k) => acc + (previsto.get(k) ?? 0), 0),
+      (mes) => chaveGrupo(mes).reduce((acc, k) => acc + (sistema.get(k) ?? 0), 0),
+      negrito,
+    );
+  }
+
+  // Um mês por vez: previsto, o que há no sistema e a diferença entre os dois.
+  function celulasValores(previstoDe: (mes: string) => number, sistemaDe: (mes: string) => number, negrito = false, miudo = false) {
     return meses.map((mes, i) => {
-      const chaves = chaveGrupo(mes);
-      const p = chaves.reduce((s, k) => s + (previsto.get(k) ?? 0), 0);
-      const s = chaves.reduce((acc, k) => acc + (sistema.get(k) ?? 0), 0);
+      const p = previstoDe(mes);
+      const s = sistemaDe(mes);
       const dif = s - p;
       const rel = p !== 0 ? Math.abs(dif) / Math.abs(p) : dif === 0 ? 0 : 1;
       const aderente = rel <= TOLERANCIA;
@@ -253,7 +325,7 @@ export default function CruzamentoErp({ empresaId, lancamentos, premissas }: Pro
       const futuro = mes > hoje;
       // Com sinais opostos (ex.: previsto de entrada, ERP com saída) a razão não significa nada.
       const cobertura = p !== 0 && (s === 0 || Math.sign(s) === Math.sign(p)) ? Math.round((Math.abs(s) / Math.abs(p)) * 100) : null;
-      const cel = cn("px-2 py-1.5 text-right tabular-nums whitespace-nowrap", negrito && "font-bold");
+      const cel = cn("px-2 text-right tabular-nums whitespace-nowrap", miudo ? "py-1" : "py-1.5", negrito && "font-bold");
       const vazio = <span className="text-[var(--text-muted)]/40">–</span>;
       return (
         <Fragment key={mes}>

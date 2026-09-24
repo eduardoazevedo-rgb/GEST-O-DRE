@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase/client";
 import { useToast } from "@/context/ToastContext";
 import { cn } from "@/lib/utils";
 import ConfirmDialog from "@/components/ui/ConfirmDialog";
+import SeletorPessoa from "@/components/fluxo-caixa/SeletorPessoa";
 import {
   REGRAS, STATUS, formatReais, gerarParcelas, lerValor, rotuloData, somarMeses,
   type Bloco, type Lancamento, type Parcela, type Regra, type Status, type Tipo,
@@ -46,6 +47,7 @@ export default function FormLancamento({ empresaId, lancamento: l, blocos, filia
   const [intervalo, setIntervalo] = useState(String(l?.intervalo_meses ?? 1));
   const [entradaPct, setEntradaPct] = useState(l?.entrada_pct != null ? String(l.entrada_pct) : "30");
   const [codigosErp, setCodigosErp] = useState(l?.codigos_erp ?? "");
+  const [cdPessoa, setCdPessoa] = useState<number | null>(l?.cd_pessoa ?? null);
   const [observacao, setObservacao] = useState(l?.observacao ?? "");
   // Modo manual: cada parcela com o próprio sinal (negativo = saída).
   const [manuais, setManuais] = useState<{ vencimento: string; valor: string }[]>(
@@ -109,6 +111,7 @@ export default function FormLancamento({ empresaId, lancamento: l, blocos, filia
       intervalo_meses: Number(intervalo) || 1,
       entrada_pct: regra === "entrada_parcelas" ? Number(entradaPct) || 0 : null,
       codigos_erp: codigosErp.trim() || null,
+      cd_pessoa: cdPessoa,
       observacao: observacao.trim() || null,
     };
 
@@ -309,6 +312,11 @@ export default function FormLancamento({ empresaId, lancamento: l, blocos, filia
                 ))}
               </div>
             )}
+          </div>
+
+          <div className="sm:col-span-6">
+            <label className={rotulo} htmlFor="fl-pessoa">Fornecedor / cliente no ERP <span className="tracking-normal font-normal">(para cruzar previsto × realizado)</span></label>
+            <SeletorPessoa id="fl-pessoa" valor={cdPessoa} onChange={(cd) => setCdPessoa(cd)} className="py-2" />
           </div>
 
           <div className="sm:col-span-6">

@@ -42,6 +42,8 @@ export interface Lancamento {
   intervalo_meses: number;
   entrada_pct: number | null;
   codigos_erp: string | null;
+  /** Fornecedor/cliente no ERP, para cruzar previsto × realizado. */
+  cd_pessoa?: number | null;
   observacao: string | null;
   origem: string | null;
   atualizado_em: string;

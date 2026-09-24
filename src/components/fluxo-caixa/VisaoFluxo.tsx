@@ -3,6 +3,7 @@
 import { Fragment, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Check, ChevronDown, ChevronRight, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import SeletorPessoa from "@/components/fluxo-caixa/SeletorPessoa";
 import {
   PREMISSA_DO_BLOCO, calcularSaldos, formatGrade, lerValor, listarMeses, mesDe, rotuloMes, somarMeses,
   type Bloco, type Lancamento, type Premissa, type SaldoReal,
@@ -22,7 +23,7 @@ interface Props {
   saldos: SaldoReal[];
   onAbrir: (l: Lancamento) => void;
   /** Cria uma linha direto na grade (bloco aberto → "+ nova linha"). */
-  onCriar?: (dados: { bloco_id: string; descricao: string; parcelas: { vencimento: string; valor: number }[] }) => Promise<void>;
+  onCriar?: (dados: { bloco_id: string; descricao: string; cd_pessoa: number | null; parcelas: { vencimento: string; valor: number }[] }) => Promise<void>;
 }
 
 const somaVis = (m: Map<string, number> | undefined, meses: string[]) =>
@@ -57,7 +58,7 @@ export default function VisaoFluxo({ blocos, lancamentos, premissas, saldos, onA
   });
   const [milhares, setMilhares] = useState(true);
   const [abertos, setAbertos] = useState<Set<string>>(new Set());
-  const [novo, setNovo] = useState<{ bloco: string; descricao: string; valores: Record<string, string> } | null>(null);
+  const [novo, setNovo] = useState<{ bloco: string; descricao: string; cdPessoa: number | null; valores: Record<string, string> } | null>(null);
   const [salvando, setSalvando] = useState(false);
   const [erroNovo, setErroNovo] = useState("");
 
@@ -114,7 +115,7 @@ export default function VisaoFluxo({ blocos, lancamentos, premissas, saldos, onA
   function abrirNovo(bloco: string) {
     setMilhares(false); // digitando em R$ cheio não há dúvida de escala
     setErroNovo("");
-    setNovo({ bloco, descricao: "", valores: {} });
+    setNovo({ bloco, descricao: "", cdPessoa: null, valores: {} });
   }
 
   async function salvarNovo() {
@@ -124,8 +125,8 @@ export default function VisaoFluxo({ blocos, lancamentos, premissas, saldos, onA
     if (parcelas.length === 0) { setErroNovo("Preencha o valor de pelo menos um mês."); return; }
     setSalvando(true); setErroNovo("");
     try {
-      await onCriar({ bloco_id: novo.bloco, descricao: novo.descricao.trim(), parcelas });
-      setNovo({ bloco: novo.bloco, descricao: "", valores: {} }); // pronta para a próxima
+      await onCriar({ bloco_id: novo.bloco, descricao: novo.descricao.trim(), cd_pessoa: novo.cdPessoa, parcelas });
+      setNovo({ bloco: novo.bloco, descricao: "", cdPessoa: null, valores: {} }); // pronta para a próxima
     } catch (e) {
       setErroNovo(e instanceof Error ? e.message : String(e));
     } finally {
@@ -145,13 +146,19 @@ export default function VisaoFluxo({ blocos, lancamentos, premissas, saldos, onA
     return (
       <tr key={`n-${b.id}`} className={cn("border-t border-[var(--border)]", fundo)}>
         <td className={cn("sticky left-0 z-10 py-1 pr-3 shadow-[2px_0_4px_rgba(0,0,0,0.05)]", fundo)} style={{ paddingLeft: recuo }}>
-          <div className="flex items-center gap-1">
-            <input autoFocus value={n.descricao} placeholder="Nome da linha" onKeyDown={teclado}
-              onChange={(e) => setNovo({ ...n, descricao: e.target.value })} className={cn(campo, "w-56")} />
-            <button onClick={salvarNovo} disabled={salvando} title="Salvar (Enter)"
-              className="rounded bg-[var(--primary)] p-1 text-white disabled:opacity-50"><Check size={12} /></button>
-            <button onClick={() => setNovo(null)} title="Cancelar (Esc)"
-              className="rounded border border-[var(--border)] p-1 text-[var(--text-muted)] hover:text-[var(--text)]"><X size={12} /></button>
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-1">
+              <input autoFocus value={n.descricao} placeholder="Nome da linha" onKeyDown={teclado}
+                onChange={(e) => setNovo({ ...n, descricao: e.target.value })} className={cn(campo, "w-56")} />
+              <button onClick={salvarNovo} disabled={salvando} title="Salvar (Enter)"
+                className="rounded bg-[var(--primary)] p-1 text-white disabled:opacity-50"><Check size={12} /></button>
+              <button onClick={() => setNovo(null)} title="Cancelar (Esc)"
+                className="rounded border border-[var(--border)] p-1 text-[var(--text-muted)] hover:text-[var(--text)]"><X size={12} /></button>
+            </div>
+            <div className="w-64">
+              <SeletorPessoa valor={n.cdPessoa} placeholder="Fornecedor no ERP (opcional)"
+                onChange={(cd) => setNovo({ ...n, cdPessoa: cd })} className="py-1 text-xs" />
+            </div>
           </div>
         </td>
         {meses.map((m) => (
