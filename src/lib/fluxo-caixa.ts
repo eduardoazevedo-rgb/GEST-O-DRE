@@ -21,7 +21,7 @@ export const REGRAS: { id: Regra; rotulo: string }[] = [
   { id: "manual", rotulo: "Manual" },
 ];
 
-export interface Bloco { id: string; nome: string; ordem: number }
+export interface Bloco { id: string; nome: string; ordem: number; pai_id?: string | null }
 
 export interface Parcela { vencimento: string; valor: number; ajustada?: boolean }
 

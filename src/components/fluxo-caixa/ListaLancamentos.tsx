@@ -71,7 +71,7 @@ export default function ListaLancamentos({ blocos, lancamentos, filiais, onAbrir
         </div>
         <select id="fc-bloco" value={bloco} onChange={(e) => setBloco(e.target.value)} className={sel}>
           <option value="">Todos os blocos</option>
-          {blocos.map((b) => <option key={b.id} value={b.id}>{b.nome}</option>)}
+          {blocos.map((b) => <option key={b.id} value={b.id}>{b.pai_id ? `  · ${b.nome}` : b.nome}</option>)}
         </select>
         <select id="fc-status" value={status} onChange={(e) => setStatus(e.target.value as typeof status)} className={sel}>
           <option value="ativos">Ativos (sem cancelados)</option>

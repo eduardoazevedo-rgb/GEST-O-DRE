@@ -27,6 +27,12 @@ interface Props {
 
 const somaVis = (m: Map<string, number> | undefined, meses: string[]) =>
   meses.reduce((s, x) => s + (m?.get(x) ?? 0), 0);
+const somaMapas = (ms: (Map<string, number> | undefined)[]) => {
+  const out = new Map<string, number>();
+  for (const m of ms) m?.forEach((v, k) => out.set(k, (out.get(k) ?? 0) + v));
+  return out;
+};
+const RECUO = [12, 36, 60] as const; // nível 0 (bloco), 1 (item/subtítulo), 2 (item do sub-bloco)
 const somar = (mapa: Map<string, number>, mes: string, v: number) => mapa.set(mes, (mapa.get(mes) ?? 0) + v);
 
 export default function VisaoFluxo({ blocos, lancamentos, premissas, saldos, onAbrir, onCriar }: Props) {
@@ -132,13 +138,13 @@ export default function VisaoFluxo({ blocos, lancamentos, premissas, saldos, onA
     if (e.key === "Escape") { e.preventDefault(); setNovo(null); }
   }
 
-  function linhaNova(b: Bloco) {
+  function linhaNova(b: Bloco, recuo: number) {
     const n = novo!;
     const campo = "w-full rounded border border-[var(--border)] bg-[var(--surface)] px-1.5 py-0.5 text-xs text-[var(--text)]";
     const fundo = "bg-[#EEEEFD] dark:bg-[#1b1b3a]";
     return (
       <tr key={`n-${b.id}`} className={cn("border-t border-[var(--border)]", fundo)}>
-        <td className={cn("sticky left-0 z-10 py-1 pr-3 shadow-[2px_0_4px_rgba(0,0,0,0.05)]", fundo)} style={{ paddingLeft: 36 }}>
+        <td className={cn("sticky left-0 z-10 py-1 pr-3 shadow-[2px_0_4px_rgba(0,0,0,0.05)]", fundo)} style={{ paddingLeft: recuo }}>
           <div className="flex items-center gap-1">
             <input autoFocus value={n.descricao} placeholder="Nome da linha" onKeyDown={teclado}
               onChange={(e) => setNovo({ ...n, descricao: e.target.value })} className={cn(campo, "w-56")} />
@@ -160,19 +166,31 @@ export default function VisaoFluxo({ blocos, lancamentos, premissas, saldos, onA
     );
   }
 
+  function linhaTexto(chave: string, conteudo: ReactNode, recuo: number, onClick?: () => void) {
+    return (
+      <tr key={chave} onClick={onClick} className={cn("border-t border-[var(--border)]", onClick && cn("group cursor-pointer", HOVER))}>
+        <td colSpan={meses.length + 2} className={cn("py-1.5 text-xs text-[var(--text-muted)]", onClick && "group-hover:text-[var(--primary)]")}
+          style={{ paddingLeft: recuo }}>
+          {conteudo}
+        </td>
+      </tr>
+    );
+  }
+
   function linhaFluxo(opts: {
-    chave: string; nome: ReactNode; valores?: Map<string, number>; nivel: 0 | 1; zebra?: boolean;
-    aberto?: boolean; onClick?: () => void; titulo?: string;
+    chave: string; nome: ReactNode; valores?: Map<string, number>; nivel: 0 | 1 | 2; zebra?: boolean;
+    subtitulo?: boolean; onClick?: () => void; titulo?: string;
   }) {
     const total = somaVis(opts.valores, meses);
     const bg = opts.zebra ? ZEBRA : "bg-[var(--surface)]";
     return (
       <tr key={opts.chave} onClick={opts.onClick}
         className={cn("group", opts.zebra && ZEBRA, HOVER, opts.onClick && "cursor-pointer",
-          opts.nivel === 0 ? "border-t border-slate-300 font-bold dark:border-slate-600" : "border-t border-[var(--border)]")}>
+          opts.nivel === 0 ? "border-t border-slate-300 font-bold dark:border-slate-600" : "border-t border-[var(--border)]",
+          opts.subtitulo && "font-semibold")}>
         <td className={cn("sticky left-0 z-10 max-w-[22rem] truncate whitespace-nowrap py-1.5 pr-3 shadow-[2px_0_4px_rgba(0,0,0,0.05)]", bg, HOVER_FIXA,
-          opts.nivel === 1 && "font-normal text-[var(--text-muted)]")}
-          style={{ paddingLeft: opts.nivel === 0 ? 12 : 36 }} title={opts.titulo}>
+          opts.nivel !== 0 && !opts.subtitulo && "font-normal text-[var(--text-muted)]")}
+          style={{ paddingLeft: RECUO[opts.nivel] }} title={opts.titulo}>
           {opts.nome}
         </td>
         {meses.map((m) => <td key={m} className={cel}>{numero(opts.valores?.get(m))}</td>)}
@@ -193,20 +211,13 @@ export default function VisaoFluxo({ blocos, lancamentos, premissas, saldos, onA
     );
   }
 
-  const linhas: ReactNode[] = [];
-  blocos.forEach((b, i) => {
-    const aberto = abertos.has(b.id);
-    const valores = calc.porBloco.get(b.id);
-    const alternar = () => setAbertos((prev) => { const n = new Set(prev); if (n.has(b.id)) n.delete(b.id); else n.add(b.id); return n; });
-    linhas.push(linhaFluxo({
-      chave: `b-${b.id}`, nivel: 0, zebra: i % 2 === 1, valores, aberto, onClick: alternar,
-      nome: <span className="inline-flex items-center gap-1">{aberto ? <ChevronDown size={13} /> : <ChevronRight size={13} />}{b.nome}</span>,
-    }));
-    if (!aberto) return;
-
+  // Linhas de dentro de um bloco: premissa, itens e a linha de criar.
+  function linhasDoBloco(b: Bloco, nivel: 1 | 2) {
+    const fora: ReactNode[] = [];
+    const recuo = RECUO[nivel];
     const premissa = PREMISSA_DO_BLOCO[b.id];
     if (premissa) {
-      linhas.push(linhaFluxo({ chave: `p-${b.id}`, nivel: 1, valores: calc.porPremissa.get(premissa.tipo), nome: <i>{premissa.rotulo}</i> }));
+      fora.push(linhaFluxo({ chave: `p-${b.id}`, nivel, valores: calc.porPremissa.get(premissa.tipo), nome: <i>{premissa.rotulo}</i> }));
     }
     // Itens do bloco com movimento no período, dos maiores para os menores.
     const itens = lancamentos
@@ -215,34 +226,49 @@ export default function VisaoFluxo({ blocos, lancamentos, premissas, saldos, onA
       .filter((x) => meses.some((m) => (calc.porLanc.get(x.l.id)?.get(m) ?? 0) !== 0))
       .sort((a, b2) => Math.abs(b2.total) - Math.abs(a.total));
     for (const { l } of itens) {
-      linhas.push(linhaFluxo({
-        chave: `l-${l.id}`, nivel: 1, valores: calc.porLanc.get(l.id), onClick: () => onAbrir(l), titulo: l.descricao,
+      fora.push(linhaFluxo({
+        chave: `l-${l.id}`, nivel, valores: calc.porLanc.get(l.id), onClick: () => onAbrir(l), titulo: l.descricao,
         nome: <>{l.unidade && <span className="mr-1 text-[var(--text-muted)]/70">{l.unidade}</span>}{l.descricao}</>,
       }));
     }
     if (!premissa && itens.length === 0 && novo?.bloco !== b.id) {
-      linhas.push(
-        <tr key={`v-${b.id}`} className="border-t border-[var(--border)]">
-          <td colSpan={meses.length + 2} className="py-2 pl-9 text-xs text-[var(--text-muted)]">Nenhum lançamento neste período.</td>
-        </tr>
-      );
+      fora.push(linhaTexto(`v-${b.id}`, "Nenhum lançamento neste período.", recuo));
     }
-    if (!onCriar) return;
+    if (!onCriar) return fora;
     if (novo?.bloco === b.id) {
-      linhas.push(linhaNova(b));
-      if (erroNovo) linhas.push(
-        <tr key={`e-${b.id}`} className="border-t border-[var(--border)]">
-          <td colSpan={meses.length + 2} className="py-1 pl-9 text-xs text-red-600 dark:text-red-400">{erroNovo}</td>
-        </tr>
-      );
+      fora.push(linhaNova(b, recuo));
+      if (erroNovo) fora.push(linhaTexto(`e-${b.id}`, <span className="text-red-600 dark:text-red-400">{erroNovo}</span>, recuo));
     } else {
-      linhas.push(
-        <tr key={`+${b.id}`} onClick={() => abrirNovo(b.id)} className={cn("group cursor-pointer border-t border-[var(--border)]", HOVER)}>
-          <td colSpan={meses.length + 2} className="py-1.5 text-xs text-[var(--text-muted)] group-hover:text-[var(--primary)]" style={{ paddingLeft: 36 }}>
-            <span className="inline-flex items-center gap-1"><Plus size={12} /> nova linha</span>
-          </td>
-        </tr>
-      );
+      fora.push(linhaTexto(`+${b.id}`, <span className="inline-flex items-center gap-1"><Plus size={12} /> nova linha</span>, recuo, () => abrirNovo(b.id)));
+    }
+    return fora;
+  }
+
+  const alternar = (id: string) =>
+    setAbertos((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+
+  const linhas: ReactNode[] = [];
+  blocos.filter((b) => !b.pai_id).forEach((b, i) => {
+    const filhos = blocos.filter((f) => f.pai_id === b.id);
+    const aberto = abertos.has(b.id);
+    // O bloco pai mostra também o que está nos sub-blocos.
+    const valores = filhos.length
+      ? somaMapas([calc.porBloco.get(b.id), ...filhos.map((f) => calc.porBloco.get(f.id))])
+      : calc.porBloco.get(b.id);
+    linhas.push(linhaFluxo({
+      chave: `b-${b.id}`, nivel: 0, zebra: i % 2 === 1, valores, onClick: () => alternar(b.id),
+      nome: <span className="inline-flex items-center gap-1">{aberto ? <ChevronDown size={13} /> : <ChevronRight size={13} />}{b.nome}</span>,
+    }));
+    if (!aberto) return;
+
+    linhas.push(...linhasDoBloco(b, 1));
+    for (const filho of filhos) {
+      const abertoFilho = abertos.has(filho.id);
+      linhas.push(linhaFluxo({
+        chave: `b-${filho.id}`, nivel: 1, subtitulo: true, valores: calc.porBloco.get(filho.id), onClick: () => alternar(filho.id),
+        nome: <span className="inline-flex items-center gap-1">{abertoFilho ? <ChevronDown size={12} /> : <ChevronRight size={12} />}{filho.nome}</span>,
+      }));
+      if (abertoFilho) linhas.push(...linhasDoBloco(filho, 2));
     }
   });
 

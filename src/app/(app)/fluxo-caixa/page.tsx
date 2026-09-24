@@ -76,7 +76,7 @@ export default function FluxoCaixaPage() {
         if (lote.length < 500) break;
       }
       const [b, p, s, f] = await Promise.all([
-        supabase.from("fc_blocos").select("id, nome, ordem").order("ordem"),
+        supabase.from("fc_blocos").select("id, nome, ordem, pai_id").order("ordem"),
         supabase.from("fc_premissas").select("mes, tipo, valor").eq("empresa_id", empresaId).order("mes").range(0, 9999),
         supabase.from("fc_saldos_reais").select("mes, valor").eq("empresa_id", empresaId).order("mes").range(0, 9999),
         supabase.from("filiais").select("cd_empresa, nome").eq("empresa_id", empresaId).order("cd_empresa"),

@@ -161,7 +161,7 @@ export default function FormLancamento({ empresaId, lancamento: l, blocos, filia
           <div className="sm:col-span-2">
             <label className={rotulo} htmlFor="fl-bloco">Bloco</label>
             <select id="fl-bloco" className={campo} value={blocoId} onChange={(e) => setBlocoId(e.target.value)}>
-              {blocos.map((b) => <option key={b.id} value={b.id}>{b.nome}</option>)}
+              {blocos.map((b) => <option key={b.id} value={b.id}>{b.pai_id ? `  · ${b.nome}` : b.nome}</option>)}
             </select>
           </div>
           <div className="sm:col-span-2">
