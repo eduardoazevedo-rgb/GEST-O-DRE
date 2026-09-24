@@ -1,6 +1,7 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
+import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import {
@@ -23,8 +24,11 @@ const GRUPO_DO_BLOCO = new Map<string, GrupoId>(GRUPOS.flatMap((g) => g.blocos.m
 const AZUL = "#0000C2";
 const AZUL_ALT = "#1A1AD1";
 const TOLERANCIA = 0.05; // ±5%: dentro disso a previsão é considerada aderente
+const POR_PAGINA = 20;   // clientes/fornecedores por vez ao abrir um grupo
 
 interface LinhaErp { mes: string; grupo: GrupoId; situacao: "realizado" | "aberto"; qtd: number; valor: number }
+interface PessoaErp { cd_pessoa: number; nome: string; lado: "receber" | "pagar"; valores: Map<string, number> }
+interface PessoasGrupo { linhas: PessoaErp[]; total: number; carregando: boolean }
 
 interface Props {
   empresaId: number;
@@ -48,6 +52,11 @@ export default function CruzamentoErp({ empresaId, lancamentos, premissas }: Pro
   const [sincronizado, setSincronizado] = useState<string | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState("");
+  // Quem está por trás do número do sistema, carregado só quando o grupo abre.
+  const [abertos, setAbertos] = useState<Set<GrupoId>>(new Set());
+  const chavePessoas = `${empresaId}|${de}|${ate}`;
+  const [carregados, setCarregados] = useState<{ chave: string; grupos: Partial<Record<GrupoId, PessoasGrupo>> }>({ chave: "", grupos: {} });
+  const pessoas = carregados.chave === chavePessoas ? carregados.grupos : {};
 
   const meses = useMemo(() => (de <= ate ? listarMeses(de, ate) : []), [de, ate]);
 
@@ -105,6 +114,131 @@ export default function CruzamentoErp({ empresaId, lancamentos, premissas }: Pro
   }, [erp, hoje]);
 
   const rotuloSistema = (mes: string) => (mes < hoje ? "Realizado" : mes > hoje ? "No ERP" : "Real.+aberto");
+
+  async function carregarGrupo(g: GrupoId, offset: number) {
+    const k = chavePessoas;
+    setCarregados((c) => {
+      const base = c.chave === k ? c.grupos : {};
+      return { chave: k, grupos: { ...base, [g]: { linhas: base[g]?.linhas ?? [], total: base[g]?.total ?? 0, carregando: true } } };
+    });
+    const { data, error } = await supabase.rpc("fc_erp_grupo_pessoas", {
+      p_empresa: empresaId, p_de: de, p_ate: ate, p_grupo: g, p_busca: null, p_limite: POR_PAGINA, p_offset: offset,
+    });
+    if (error) {
+      setErro(error.message);
+      setCarregados((c) => (c.chave !== k || !c.grupos[g] ? c : { chave: k, grupos: { ...c.grupos, [g]: { ...c.grupos[g]!, carregando: false } } }));
+      return;
+    }
+    const linhas = (data ?? []) as Record<string, unknown>[];
+    setCarregados((c) => {
+      if (c.chave !== k) return c;
+      const atual = c.grupos[g];
+      const novas = linhas.map((x) => ({
+        cd_pessoa: Number(x.cd_pessoa), nome: String(x.nome), lado: x.lado as PessoaErp["lado"],
+        valores: new Map(Object.entries((x.valores ?? {}) as Record<string, number | string>).map(([m, v]) => [m, Number(v)])),
+      }));
+      return {
+        chave: k,
+        grupos: {
+          ...c.grupos,
+          [g]: {
+            linhas: [...(offset === 0 ? [] : atual?.linhas ?? []), ...novas],
+            total: linhas[0] ? Number(linhas[0].total_pessoas) : (offset === 0 ? 0 : atual?.total ?? 0),
+            carregando: false,
+          },
+        },
+      };
+    });
+  }
+
+  function alternar(g: GrupoId) {
+    const abrir = !abertos.has(g);
+    setAbertos((prev) => { const n = new Set(prev); if (abrir) n.add(g); else n.delete(g); return n; });
+    if (abrir && !pessoas[g]) carregarGrupo(g, 0);
+  }
+
+  // Trocou o período: recarrega os grupos que estão abertos.
+  useEffect(() => {
+    if (empresaId !== 1 || de > ate) return;
+    abertos.forEach((g) => { carregarGrupo(g, 0); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chavePessoas]);
+
+  // Linha de um cliente/fornecedor: só a coluna do sistema tem valor.
+  function linhaPessoa(chave: string, nome: ReactNode, valores: Map<string, number>, onClick?: () => void) {
+    const cel = "px-2 py-1 text-right tabular-nums whitespace-nowrap";
+    const vazio = <span className="text-[var(--text-muted)]/40">–</span>;
+    return (
+      <tr key={chave} onClick={onClick}
+        className={cn("group border-t border-[var(--border)] hover:bg-[#EDEDFA] dark:hover:bg-[#191934]", onClick && "cursor-pointer")}>
+        <td className="sticky left-0 z-10 max-w-[22rem] truncate whitespace-nowrap bg-[var(--surface)] py-1 pl-8 pr-3 text-[var(--text-muted)] shadow-[2px_0_4px_rgba(0,0,0,0.05)] group-hover:bg-[#EDEDFA] dark:group-hover:bg-[#191934]">
+          {nome}
+        </td>
+        {meses.map((mes, i) => {
+          const zebra = i % 2 === 1 && "bg-black/[0.015] dark:bg-white/[0.02]";
+          const v = valores.get(mes) ?? 0;
+          return (
+            <Fragment key={mes}>
+              <td className={cn(cel, "border-l-2 border-slate-200 dark:border-slate-700", zebra)} />
+              <td className={cn(cel, zebra)}>{v ? formatGrade(v, milhares) : vazio}</td>
+              <td className={cn(cel, "pr-3", zebra)} />
+            </Fragment>
+          );
+        })}
+      </tr>
+    );
+  }
+
+  function linhasDoGrupo(g: (typeof GRUPOS)[number]) {
+    const pg = pessoas[g.id];
+    const lista = pg?.linhas ?? [];
+    const quem = g.id === "recebimentos" ? "clientes" : "fornecedores";
+    const fora: ReactNode[] = lista.map((p) => linhaPessoa(
+      `pe-${g.id}-${p.cd_pessoa}-${p.lado}`,
+      <>
+        <span className="mr-1 tabular-nums opacity-70">{p.cd_pessoa}</span>{p.nome}
+        {g.id === "estrategicos" && p.lado === "receber" && (
+          <span className="ml-1.5 rounded bg-emerald-100 px-1 text-[9px] font-bold uppercase text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-200">crédito</span>
+        )}
+      </>,
+      p.valores,
+    ));
+    if (!pg || (pg.carregando && lista.length === 0)) {
+      fora.push(
+        <tr key={`c-${g.id}`} className="border-t border-[var(--border)]">
+          <td colSpan={meses.length * 3 + 1} className="py-2 pl-8 text-xs text-[var(--text-muted)]">
+            <Loader2 size={12} className="mr-1 inline animate-spin" />carregando {quem} do ERP…
+          </td>
+        </tr>
+      );
+      return fora;
+    }
+    const faltam = pg.total - lista.length;
+    if (faltam > 0) {
+      // O restante do grupo, para a soma das linhas fechar com o total.
+      const resto = new Map<string, number>();
+      for (const m of meses) {
+        const total = sistema.get(`${g.id}|${m}`) ?? 0;
+        resto.set(m, Math.round((total - lista.reduce((acc, p) => acc + (p.valores.get(m) ?? 0), 0)) * 100) / 100);
+      }
+      fora.push(linhaPessoa(`r-${g.id}`,
+        <span className="inline-flex items-center gap-1.5 italic">
+          Demais {faltam.toLocaleString("pt-BR")} {quem}
+          <span className="rounded border border-[var(--border)] bg-[var(--surface)] px-1.5 text-[10px] font-semibold not-italic text-[var(--text)]">
+            {pg.carregando ? <Loader2 size={10} className="inline animate-spin" /> : `+ ${Math.min(POR_PAGINA, faltam)}`}
+          </span>
+        </span>,
+        resto,
+        () => { if (!pg.carregando) carregarGrupo(g.id, lista.length); }));
+    } else if (pg.total === 0) {
+      fora.push(
+        <tr key={`v-${g.id}`} className="border-t border-[var(--border)]">
+          <td colSpan={meses.length * 3 + 1} className="py-2 pl-8 text-xs text-[var(--text-muted)]">Nenhum título do ERP neste grupo e período.</td>
+        </tr>
+      );
+    }
+    return fora;
+  }
 
   function celulas(chaveGrupo: (mes: string) => string[], negrito = false) {
     return meses.map((mes, i) => {
@@ -214,14 +348,23 @@ export default function CruzamentoErp({ empresaId, lancamentos, premissas }: Pro
             </thead>
             <tbody>
               {GRUPOS.map((g, i) => (
-                <tr key={g.id} className={cn("group border-t border-[var(--border)] hover:bg-[#EDEDFA] dark:hover:bg-[#191934]", i % 2 === 1 && "bg-[#F1F2F6] dark:bg-neutral-800")}>
-                  <td className={cn("sticky left-0 z-10 px-3 py-1.5 shadow-[2px_0_4px_rgba(0,0,0,0.05)] group-hover:bg-[#EDEDFA] dark:group-hover:bg-[#191934]",
-                    i % 2 === 1 ? "bg-[#F1F2F6] dark:bg-neutral-800" : "bg-[var(--surface)]")} title={`No ERP: ${g.erp}`}>
-                    <div className="font-semibold text-[var(--text)]">{g.rotulo}</div>
-                    <div className="text-[10px] text-[var(--text-muted)]">{g.erp}</div>
-                  </td>
-                  {celulas((mes) => [`${g.id}|${mes}`])}
-                </tr>
+                <Fragment key={g.id}>
+                  <tr onClick={() => alternar(g.id)}
+                    className={cn("group cursor-pointer border-t border-[var(--border)] hover:bg-[#EDEDFA] dark:hover:bg-[#191934]", i % 2 === 1 && "bg-[#F1F2F6] dark:bg-neutral-800")}>
+                    <td className={cn("sticky left-0 z-10 px-3 py-1.5 shadow-[2px_0_4px_rgba(0,0,0,0.05)] group-hover:bg-[#EDEDFA] dark:group-hover:bg-[#191934]",
+                      i % 2 === 1 ? "bg-[#F1F2F6] dark:bg-neutral-800" : "bg-[var(--surface)]")} title={`No ERP: ${g.erp}`}>
+                      <div className="flex items-start gap-1">
+                        {abertos.has(g.id) ? <ChevronDown size={13} className="mt-0.5 shrink-0" /> : <ChevronRight size={13} className="mt-0.5 shrink-0" />}
+                        <div>
+                          <div className="font-semibold text-[var(--text)]">{g.rotulo}</div>
+                          <div className="text-[10px] text-[var(--text-muted)]">{g.erp}</div>
+                        </div>
+                      </div>
+                    </td>
+                    {celulas((mes) => [`${g.id}|${mes}`])}
+                  </tr>
+                  {abertos.has(g.id) && linhasDoGrupo(g)}
+                </Fragment>
               ))}
               {[
                 { id: "entradas", rotulo: "Entradas", grupos: ["recebimentos"] },
@@ -246,6 +389,7 @@ export default function CruzamentoErp({ empresaId, lancamentos, premissas }: Pro
         <p>
           <b>Dif.</b> (meses passados e atual) = sistema − previsto: verde é melhor para o caixa (recebeu mais ou pagou menos), vermelho é pior; <b>≈</b> indica diferença de até ±5% do previsto.
           <b>% no ERP</b> (meses futuros) = quanto da previsão já está lançado em títulos — o resto ainda é estimativa.
+          Clique num grupo para abrir os clientes e fornecedores que formam a coluna do sistema, dos maiores para os menores.
           Ficam fora do ERP: títulos reparcelados (status A), incobráveis, adiantamentos e provisões. Só empresas 1000 a 1024.
         </p>
       </div>
