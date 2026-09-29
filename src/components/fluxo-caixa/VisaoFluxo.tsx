@@ -165,9 +165,16 @@ export default function VisaoFluxo({
               <button onClick={() => setNovo(null)} title="Cancelar (Esc)"
                 className="rounded border border-[var(--border)] p-1 text-[var(--text-muted)] hover:text-[var(--text)]"><X size={12} /></button>
             </div>
-            <div className="w-64">
-              <SeletorPessoa valor={n.cdPessoa} placeholder="Fornecedor no ERP (opcional)"
-                onChange={(cd) => setNovo({ ...n, cdPessoa: cd })} className="py-1 text-xs" />
+            <div className="flex items-center gap-1">
+              <select value={n.unidade ?? ""} onChange={(e) => setNovo({ ...n, unidade: e.target.value ? Number(e.target.value) : null })}
+                title="Unidade" className={cn(campo, "w-28")}>
+                <option value="">Sem unidade</option>
+                {filiais.map((fi) => <option key={fi.cd} value={fi.cd}>{fi.cd}</option>)}
+              </select>
+              <div className="w-56">
+                <SeletorPessoa valor={n.cdPessoa} placeholder="Fornecedor no ERP (opcional)"
+                  onChange={(cd) => setNovo({ ...n, cdPessoa: cd })} className="py-1 text-xs" />
+              </div>
             </div>
           </div>
         </td>
@@ -468,7 +475,7 @@ export default function VisaoFluxo({
       )}
       <p className="text-xs text-[var(--text-muted)]">
         Saldo inicial de cada mês: o real do mês anterior quando informado; senão, o previsto do anterior — a mesma regra da planilha.
-        Os blocos abrem em unidade e lançamento; a setinha na frente do lançamento mostra o fornecedor (azul quando já tem um), e
+        Os blocos com unidade preenchida abrem em unidade e lançamento; a setinha na frente do lançamento mostra o fornecedor (azul quando já tem um), e
         clicar nele escolhe outro no cadastro do ERP. Clique no lançamento para editar. Dentro do bloco aberto, <b>+ nova linha</b> cria um lançamento
         aqui mesmo: nome, valor nos meses e Enter para salvar (Esc cancela). O valor entra em R$ cheios, com o sinal do bloco —
         digite <b>+</b> ou <b>−</b> na frente para inverter.
