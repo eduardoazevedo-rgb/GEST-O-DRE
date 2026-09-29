@@ -17,7 +17,8 @@ const COL_TOTAL = "border-l-2 border-slate-300 bg-black/[0.03] dark:border-slate
 const GRUPOS = [
   { id: "recebimentos", nome: "Recebimentos de clientes", quem: "clientes", um: "cliente", regra: "Títulos a receber: contas, cartão e cheque" },
   { id: "fornecedores", nome: "Pagamento a fornecedores", quem: "fornecedores", um: "fornecedor", regra: "Contas a pagar, fora os grupos abaixo" },
-  { id: "estrategicos", nome: "Fornecedores matérias-primas", quem: "fornecedores", um: "fornecedor", regra: "Códigos do campo \"Códigos no ERP\" dos lançamentos: pagamentos e créditos concedidos" },
+  { id: "estrategicos", nome: "Fornecedores matérias-primas", quem: "fornecedores", um: "fornecedor", regra: "O que se paga aos fornecedores com código no campo \"Códigos no ERP\" dos lançamentos" },
+  { id: "creditos", nome: "Créditos de fornecedores", quem: "fornecedores", um: "fornecedor", regra: "Créditos concedidos por esses fornecedores (a receber, tipos 24 e 103)" },
   { id: "financiamentos", nome: "Financiamentos e consórcios", quem: "credores", um: "credor", regra: "Empréstimos (tipos 18, 19) e consórcios (41 a 43)" },
   { id: "investimentos", nome: "Investimentos (imobilizado)", quem: "fornecedores", um: "fornecedor", regra: "Contas a pagar – imobilizado (tipo 34)" },
 ] as const;
@@ -304,14 +305,15 @@ export default function RealizadoErp({ empresaId }: { empresaId: number }) {
     }
   });
 
-  const saidas = GRUPOS.filter((g) => g.id !== "recebimentos").map((g) => g.id);
+  const entradas: GrupoId[] = ["recebimentos", "creditos"];
+  const saidas = GRUPOS.filter((g) => !entradas.includes(g.id)).map((g) => g.id);
   const somaGrupos = (ids: GrupoId[]) => {
     const m = new Map<string, number>();
     for (const id of ids) calc.porGrupo.get(id)?.forEach((v, k) => m.set(k, (m.get(k) ?? 0) + v));
     return { valores: m, atraso: ids.reduce((s, id) => s + (calc.atraso.get(id) ?? 0), 0) };
   };
   const totais = [
-    { id: "entradas", nome: "Entradas", ...somaGrupos(["recebimentos"]) },
+    { id: "entradas", nome: "Entradas", ...somaGrupos(entradas) },
     { id: "saidas", nome: "Saídas", ...somaGrupos(saidas) },
     { id: "liquido", nome: "Geração de caixa", ...somaGrupos(GRUPOS.map((g) => g.id)) },
   ];

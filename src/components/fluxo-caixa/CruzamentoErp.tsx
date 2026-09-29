@@ -14,7 +14,8 @@ import {
 const GRUPOS = [
   { id: "recebimentos", rotulo: "Recebimentos de clientes", blocos: ["recebimentos"], erp: "Títulos a receber: contas, cartão e cheque" },
   { id: "fornecedores", rotulo: "Fornecedores gerais", blocos: ["fornecedores", "seguros", "pessoal", "tributos"], erp: "Contas a pagar, fora os grupos abaixo" },
-  { id: "estrategicos", rotulo: "Fornecedores matérias-primas", blocos: ["estrategicos"], erp: "Fornecedores com código no campo \"Códigos no ERP\" dos lançamentos" },
+  { id: "estrategicos", rotulo: "Fornecedores matérias-primas", blocos: ["estrategicos"], erp: "O que se paga aos fornecedores com código no campo \"Códigos no ERP\"" },
+  { id: "creditos", rotulo: "Créditos de fornecedores", blocos: ["creditos_fornecedores"], erp: "Créditos concedidos por esses fornecedores (a receber, tipos 24 e 103)" },
   { id: "financiamentos", rotulo: "Financiamentos", blocos: ["financiamentos"], erp: "Empréstimos (tipos 18, 19) e consórcios (41 a 43)" },
   { id: "investimentos", rotulo: "Investimentos, veículos e SSMA", blocos: ["investimentos", "veiculos", "ssma"], erp: "Contas a pagar – imobilizado (tipo 34)" },
 ] as const;
@@ -356,7 +357,8 @@ export default function CruzamentoErp({ empresaId, lancamentos, premissas }: Pro
     </p>;
   }
 
-  const saidas = GRUPOS.filter((g) => g.id !== "recebimentos").map((g) => g.id);
+  const entradas: GrupoId[] = ["recebimentos", "creditos"];
+  const saidas = GRUPOS.filter((g) => !entradas.includes(g.id)).map((g) => g.id);
   const sel = "rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5 text-sm text-[var(--text)]";
 
   return (
@@ -439,7 +441,7 @@ export default function CruzamentoErp({ empresaId, lancamentos, premissas }: Pro
                 </Fragment>
               ))}
               {[
-                { id: "entradas", rotulo: "Entradas", grupos: ["recebimentos"] },
+                { id: "entradas", rotulo: "Entradas", grupos: entradas },
                 { id: "saidas", rotulo: "Saídas", grupos: saidas },
                 { id: "liquido", rotulo: "Líquido do mês", grupos: GRUPOS.map((g) => g.id) },
               ].map((t, i) => (
