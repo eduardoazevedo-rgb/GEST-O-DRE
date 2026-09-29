@@ -252,17 +252,35 @@ export default function VisaoFluxo({
     return linhaTexto(`f-${l.id}`,
       nome
         ? <span className="inline-flex items-center gap-1"><span className="tabular-nums opacity-60">{l.cd_pessoa}</span>{nome}</span>
-        : <span className="inline-flex items-center gap-1 opacity-70"><Plus size={11} /> fornecedor</span>,
+        : <span className="inline-flex items-center gap-1 opacity-70"><Plus size={11} /> sem fornecedor</span>,
       RECUO[nivel], onFornecedor ? () => setFornecedorDe(l.id) : undefined);
   }
 
+  // O fornecedor fica escondido até abrir a seta do lançamento — sem ele, a
+  // grade ficaria com uma linha a mais embaixo de cada item.
   function linhasDoItem(l: Lancamento, nivel: number) {
+    const chave = `fo-${l.id}`;
+    const aberto = abertos.has(chave);
+    const temFornecedor = l.cd_pessoa != null;
     const fora: ReactNode[] = [linhaFluxo({
       chave: `l-${l.id}`, nivel, valores: calc.porLanc.get(l.id), onClick: () => onAbrir(l), titulo: l.descricao,
-      nome: l.descricao,
+      nome: (
+        <span className="inline-flex items-center gap-1">
+          <span role="button" tabIndex={0} title={temFornecedor ? "Ver o fornecedor" : "Ligar a um fornecedor do ERP"}
+            onClick={(e) => { e.stopPropagation(); alternar(chave); }}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); alternar(chave); } }}
+            className={cn("-ml-4 shrink-0 rounded p-0.5 hover:text-[var(--primary)]",
+              temFornecedor ? "text-[var(--primary)]" : "text-[var(--text-muted)]/50")}>
+            {aberto ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+          </span>
+          {l.descricao}
+        </span>
+      ),
     })];
-    const f = linhaFornecedor(l, nivel + 1);
-    if (f) fora.push(f);
+    if (aberto) {
+      const linha = linhaFornecedor(l, nivel + 1);
+      if (linha) fora.push(linha);
+    }
     return fora;
   }
 
@@ -450,8 +468,8 @@ export default function VisaoFluxo({
       )}
       <p className="text-xs text-[var(--text-muted)]">
         Saldo inicial de cada mês: o real do mês anterior quando informado; senão, o previsto do anterior — a mesma regra da planilha.
-        Os blocos abrem em unidade, lançamento e fornecedor; clique num lançamento para editar e no fornecedor para escolher outro
-        no cadastro do ERP. Dentro do bloco aberto, <b>+ nova linha</b> cria um lançamento
+        Os blocos abrem em unidade e lançamento; a setinha na frente do lançamento mostra o fornecedor (azul quando já tem um), e
+        clicar nele escolhe outro no cadastro do ERP. Clique no lançamento para editar. Dentro do bloco aberto, <b>+ nova linha</b> cria um lançamento
         aqui mesmo: nome, valor nos meses e Enter para salvar (Esc cancela). O valor entra em R$ cheios, com o sinal do bloco —
         digite <b>+</b> ou <b>−</b> na frente para inverter.
       </p>
