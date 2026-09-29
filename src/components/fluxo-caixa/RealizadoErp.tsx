@@ -17,7 +17,7 @@ const COL_TOTAL = "border-l-2 border-slate-300 bg-black/[0.03] dark:border-slate
 const GRUPOS = [
   { id: "recebimentos", nome: "Recebimentos de clientes", quem: "clientes", um: "cliente", regra: "Títulos a receber: contas, cartão e cheque" },
   { id: "fornecedores", nome: "Pagamento a fornecedores", quem: "fornecedores", um: "fornecedor", regra: "Contas a pagar, fora os grupos abaixo" },
-  { id: "estrategicos", nome: "Fornecedores estratégicos", quem: "fornecedores", um: "fornecedor", regra: "Códigos do campo \"Códigos no ERP\" dos lançamentos: pagamentos e créditos concedidos" },
+  { id: "estrategicos", nome: "Fornecedores matérias-primas", quem: "fornecedores", um: "fornecedor", regra: "Códigos do campo \"Códigos no ERP\" dos lançamentos: pagamentos e créditos concedidos" },
   { id: "financiamentos", nome: "Financiamentos e consórcios", quem: "credores", um: "credor", regra: "Empréstimos (tipos 18, 19) e consórcios (41 a 43)" },
   { id: "investimentos", nome: "Investimentos (imobilizado)", quem: "fornecedores", um: "fornecedor", regra: "Contas a pagar – imobilizado (tipo 34)" },
 ] as const;
