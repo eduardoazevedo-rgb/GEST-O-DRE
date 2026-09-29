@@ -96,15 +96,36 @@ export default function FluxoCaixaPage() {
 
   useEffect(() => { carregar(); }, [carregar]);
 
+  // Nomes dos fornecedores apontados nos lançamentos, para mostrar na grade.
+  const [nomesPessoas, setNomesPessoas] = useState<Map<number, string>>(new Map());
+  useEffect(() => {
+    const cds = [...new Set(lancamentos.filter((l) => l.cd_pessoa != null).map((l) => l.cd_pessoa as number))];
+    if (cds.length === 0) { setNomesPessoas(new Map()); return; }
+    let vivo = true;
+    supabase.from("fc_erp_pessoas").select("cd_pessoa, nome").in("cd_pessoa", cds)
+      .then(({ data }) => {
+        if (!vivo) return;
+        setNomesPessoas(new Map(((data ?? []) as { cd_pessoa: number; nome: string }[]).map((p) => [Number(p.cd_pessoa), p.nome])));
+      });
+    return () => { vivo = false; };
+  }, [supabase, lancamentos]);
+
+  // Fornecedor trocado direto na grade.
+  const definirFornecedor = useCallback(async (l: Lancamento, cd: number | null) => {
+    const { error } = await supabase.from("fc_lancamentos").update({ cd_pessoa: cd }).eq("id", l.id);
+    if (error) { setErro(error.message); return; }
+    await carregar();
+  }, [supabase, carregar]);
+
   const abrir = useCallback((l: Lancamento) => setEditando(l), []);
 
   // Linha criada direto na grade do Fluxo próprio: vira um lançamento manual, com uma
   // parcela por mês preenchido.
-  const criarLinha = useCallback(async (dados: { bloco_id: string; descricao: string; cd_pessoa: number | null; parcelas: { vencimento: string; valor: number }[] }) => {
+  const criarLinha = useCallback(async (dados: { bloco_id: string; unidade: number | null; descricao: string; cd_pessoa: number | null; parcelas: { vencimento: string; valor: number }[] }) => {
     const soma = dados.parcelas.reduce((s, p) => s + p.valor, 0);
     const { error } = await supabase.rpc("fc_salvar_lancamento", {
       p_lancamento: {
-        empresa_id: empresaId, bloco_id: dados.bloco_id, descricao: dados.descricao, cd_pessoa: dados.cd_pessoa,
+        empresa_id: empresaId, bloco_id: dados.bloco_id, unidade: dados.unidade, descricao: dados.descricao, cd_pessoa: dados.cd_pessoa,
         status: "previsto", tipo: soma >= 0 ? "entrada" : "saida", regra: "manual",
         valor_total: Math.abs(Math.round(soma * 100) / 100),
         primeiro_vencimento: dados.parcelas[0].vencimento,
@@ -162,7 +183,8 @@ export default function FluxoCaixaPage() {
       {carregando && lancamentos.length === 0 ? (
         <p className="py-16 text-center text-sm text-[var(--text-muted)]">Carregando…</p>
       ) : aba === "visao" ? (
-        <VisaoFluxo blocos={blocos} lancamentos={lancamentos} premissas={premissas} saldos={saldos} onAbrir={abrir} onCriar={criarLinha} />
+        <VisaoFluxo blocos={blocos} lancamentos={lancamentos} premissas={premissas} saldos={saldos} filiais={filiais}
+          nomesPessoas={nomesPessoas} onAbrir={abrir} onCriar={criarLinha} onFornecedor={definirFornecedor} />
       ) : aba === "cruzamento" ? (
         <CruzamentoErp empresaId={empresaId} lancamentos={lancamentos} premissas={premissas} />
       ) : aba === "realizado" ? (

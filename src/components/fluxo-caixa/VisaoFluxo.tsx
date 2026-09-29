@@ -22,8 +22,13 @@ interface Props {
   premissas: Premissa[];
   saldos: SaldoReal[];
   onAbrir: (l: Lancamento) => void;
-  /** Cria uma linha direto na grade (bloco aberto → "+ nova linha"). */
-  onCriar?: (dados: { bloco_id: string; descricao: string; cd_pessoa: number | null; parcelas: { vencimento: string; valor: number }[] }) => Promise<void>;
+  filiais?: { cd: number; nome: string }[];
+  /** Nome dos fornecedores já apontados nos lançamentos. */
+  nomesPessoas?: Map<number, string>;
+  /** Cria uma linha direto na grade (bloco/unidade aberta → "+ nova linha"). */
+  onCriar?: (dados: { bloco_id: string; unidade: number | null; descricao: string; cd_pessoa: number | null; parcelas: { vencimento: string; valor: number }[] }) => Promise<void>;
+  /** Troca o fornecedor de um lançamento direto na grade. */
+  onFornecedor?: (l: Lancamento, cd: number | null) => void;
 }
 
 const somaVis = (m: Map<string, number> | undefined, meses: string[]) =>
@@ -33,10 +38,14 @@ const somaMapas = (ms: (Map<string, number> | undefined)[]) => {
   for (const m of ms) m?.forEach((v, k) => out.set(k, (out.get(k) ?? 0) + v));
   return out;
 };
-const RECUO = [12, 36, 60] as const; // nível 0 (bloco), 1 (item/subtítulo), 2 (item do sub-bloco)
+// nível 0 bloco · 1 unidade/sub-bloco · 2 lançamento · 3 fornecedor (mais um nível dentro dos sub-blocos)
+const RECUO = [12, 36, 60, 84, 108] as const;
 const somar = (mapa: Map<string, number>, mes: string, v: number) => mapa.set(mes, (mapa.get(mes) ?? 0) + v);
 
-export default function VisaoFluxo({ blocos, lancamentos, premissas, saldos, onAbrir, onCriar }: Props) {
+export default function VisaoFluxo({
+  blocos, lancamentos, premissas, saldos, onAbrir, onCriar, onFornecedor,
+  filiais = [], nomesPessoas = new Map(),
+}: Props) {
   // Todos os meses com algum dado, para montar os seletores e o padrão.
   const mesesComDado = useMemo(() => {
     const s = new Set<string>();
@@ -58,7 +67,8 @@ export default function VisaoFluxo({ blocos, lancamentos, premissas, saldos, onA
   });
   const [milhares, setMilhares] = useState(true);
   const [abertos, setAbertos] = useState<Set<string>>(new Set());
-  const [novo, setNovo] = useState<{ bloco: string; descricao: string; cdPessoa: number | null; valores: Record<string, string> } | null>(null);
+  const [novo, setNovo] = useState<{ bloco: string; unidade: number | null; descricao: string; cdPessoa: number | null; valores: Record<string, string> } | null>(null);
+  const [fornecedorDe, setFornecedorDe] = useState<string | null>(null);
   const [salvando, setSalvando] = useState(false);
   const [erroNovo, setErroNovo] = useState("");
 
@@ -112,10 +122,10 @@ export default function VisaoFluxo({ blocos, lancamentos, premissas, saldos, onA
     return out;
   }
 
-  function abrirNovo(bloco: string) {
+  function abrirNovo(bloco: string, unidade: number | null) {
     setMilhares(false); // digitando em R$ cheio não há dúvida de escala
     setErroNovo("");
-    setNovo({ bloco, descricao: "", cdPessoa: null, valores: {} });
+    setNovo({ bloco, unidade, descricao: "", cdPessoa: null, valores: {} });
   }
 
   async function salvarNovo() {
@@ -125,8 +135,8 @@ export default function VisaoFluxo({ blocos, lancamentos, premissas, saldos, onA
     if (parcelas.length === 0) { setErroNovo("Preencha o valor de pelo menos um mês."); return; }
     setSalvando(true); setErroNovo("");
     try {
-      await onCriar({ bloco_id: novo.bloco, descricao: novo.descricao.trim(), cd_pessoa: novo.cdPessoa, parcelas });
-      setNovo({ bloco: novo.bloco, descricao: "", cdPessoa: null, valores: {} }); // pronta para a próxima
+      await onCriar({ bloco_id: novo.bloco, unidade: novo.unidade, descricao: novo.descricao.trim(), cd_pessoa: novo.cdPessoa, parcelas });
+      setNovo({ bloco: novo.bloco, unidade: novo.unidade, descricao: "", cdPessoa: null, valores: {} }); // pronta para a próxima
     } catch (e) {
       setErroNovo(e instanceof Error ? e.message : String(e));
     } finally {
@@ -144,7 +154,7 @@ export default function VisaoFluxo({ blocos, lancamentos, premissas, saldos, onA
     const campo = "w-full rounded border border-[var(--border)] bg-[var(--surface)] px-1.5 py-0.5 text-xs text-[var(--text)]";
     const fundo = "bg-[#EEEEFD] dark:bg-[#1b1b3a]";
     return (
-      <tr key={`n-${b.id}`} className={cn("border-t border-[var(--border)]", fundo)}>
+      <tr key={`n-${b.id}-${n.unidade ?? "s"}`} className={cn("border-t border-[var(--border)]", fundo)}>
         <td className={cn("sticky left-0 z-10 py-1 pr-3 shadow-[2px_0_4px_rgba(0,0,0,0.05)]", fundo)} style={{ paddingLeft: recuo }}>
           <div className="flex flex-col gap-1">
             <div className="flex items-center gap-1">
@@ -185,7 +195,7 @@ export default function VisaoFluxo({ blocos, lancamentos, premissas, saldos, onA
   }
 
   function linhaFluxo(opts: {
-    chave: string; nome: ReactNode; valores?: Map<string, number>; nivel: 0 | 1 | 2; zebra?: boolean;
+    chave: string; nome: ReactNode; valores?: Map<string, number>; nivel: number; zebra?: boolean;
     subtitulo?: boolean; onClick?: () => void; titulo?: string;
   }) {
     const total = somaVis(opts.valores, meses);
@@ -218,10 +228,69 @@ export default function VisaoFluxo({ blocos, lancamentos, premissas, saldos, onA
     );
   }
 
-  // Linhas de dentro de um bloco: premissa, itens e a linha de criar.
-  function linhasDoBloco(b: Bloco, nivel: 1 | 2) {
+  // Fornecedor do lançamento: mostra e deixa escolher na lista do ERP.
+  function linhaFornecedor(l: Lancamento, nivel: number) {
+    const nome = l.cd_pessoa != null ? (nomesPessoas.get(l.cd_pessoa) ?? `Pessoa ${l.cd_pessoa}`) : null;
+    if (!onFornecedor && !nome) return null;
+    if (fornecedorDe === l.id && onFornecedor) {
+      return (
+        <tr key={`f-${l.id}`} className="border-t border-[var(--border)] bg-[#EEEEFD] dark:bg-[#1b1b3a]">
+          <td colSpan={meses.length + 2} className="py-1 pr-3" style={{ paddingLeft: RECUO[nivel] }}>
+            <div className="flex items-center gap-2">
+              <div className="w-72">
+                <SeletorPessoa valor={l.cd_pessoa ?? null} nomeInicial={nome} className="py-1 text-xs"
+                  placeholder="Escolher fornecedor no ERP"
+                  onChange={(cd) => { setFornecedorDe(null); onFornecedor(l, cd); }} />
+              </div>
+              <button onClick={() => setFornecedorDe(null)}
+                className="rounded border border-[var(--border)] px-2 py-0.5 text-[10px] text-[var(--text-muted)] hover:text-[var(--text)]">fechar</button>
+            </div>
+          </td>
+        </tr>
+      );
+    }
+    return linhaTexto(`f-${l.id}`,
+      nome
+        ? <span className="inline-flex items-center gap-1"><span className="tabular-nums opacity-60">{l.cd_pessoa}</span>{nome}</span>
+        : <span className="inline-flex items-center gap-1 opacity-70"><Plus size={11} /> fornecedor</span>,
+      RECUO[nivel], onFornecedor ? () => setFornecedorDe(l.id) : undefined);
+  }
+
+  function linhasDoItem(l: Lancamento, nivel: number) {
+    const fora: ReactNode[] = [linhaFluxo({
+      chave: `l-${l.id}`, nivel, valores: calc.porLanc.get(l.id), onClick: () => onAbrir(l), titulo: l.descricao,
+      nome: l.descricao,
+    })];
+    const f = linhaFornecedor(l, nivel + 1);
+    if (f) fora.push(f);
+    return fora;
+  }
+
+  function linhaCriar(b: Bloco, unidade: number | null, nivel: number) {
     const fora: ReactNode[] = [];
+    if (!onCriar) return fora;
     const recuo = RECUO[nivel];
+    const chave = `${b.id}|${unidade ?? ""}`;
+    if (novo && `${novo.bloco}|${novo.unidade ?? ""}` === chave) {
+      fora.push(linhaNova(b, recuo));
+      if (erroNovo) fora.push(linhaTexto(`e-${chave}`, <span className="text-red-600 dark:text-red-400">{erroNovo}</span>, recuo));
+    } else {
+      fora.push(linhaTexto(`+${chave}`, <span className="inline-flex items-center gap-1"><Plus size={12} /> nova linha</span>,
+        recuo, () => abrirNovo(b.id, unidade)));
+    }
+    return fora;
+  }
+
+  const rotuloUnidade = (u: number | null) => {
+    if (u == null) return "Sem unidade";
+    const nome = filiais.find((f) => f.cd === u)?.nome;
+    return nome ? `Unidade ${u} — ${nome}` : `Unidade ${u}`;
+  };
+
+  // Linhas de dentro de um bloco: premissa, unidades, itens, fornecedores e a
+  // linha de criar. Blocos sem nenhuma unidade pulam esse nível.
+  function linhasDoBloco(b: Bloco, nivel: number) {
+    const fora: ReactNode[] = [];
     const premissa = PREMISSA_DO_BLOCO[b.id];
     if (premissa) {
       fora.push(linhaFluxo({ chave: `p-${b.id}`, nivel, valores: calc.porPremissa.get(premissa.tipo), nome: <i>{premissa.rotulo}</i> }));
@@ -232,22 +301,36 @@ export default function VisaoFluxo({ blocos, lancamentos, premissas, saldos, onA
       .map((l) => ({ l, total: somaVis(calc.porLanc.get(l.id), meses) }))
       .filter((x) => meses.some((m) => (calc.porLanc.get(x.l.id)?.get(m) ?? 0) !== 0))
       .sort((a, b2) => Math.abs(b2.total) - Math.abs(a.total));
-    for (const { l } of itens) {
-      fora.push(linhaFluxo({
-        chave: `l-${l.id}`, nivel, valores: calc.porLanc.get(l.id), onClick: () => onAbrir(l), titulo: l.descricao,
-        nome: <>{l.unidade && <span className="mr-1 text-[var(--text-muted)]/70">{l.unidade}</span>}{l.descricao}</>,
-      }));
+
+    if (itens.some((x) => x.l.unidade != null)) {
+      const porUnidade = new Map<number | null, typeof itens>();
+      for (const item of itens) porUnidade.set(item.l.unidade ?? null, [...(porUnidade.get(item.l.unidade ?? null) ?? []), item]);
+      const grupos = [...porUnidade.entries()]
+        .map(([unidade, lista]) => ({
+          unidade, lista,
+          valores: somaMapas(lista.map((x) => calc.porLanc.get(x.l.id))),
+          total: lista.reduce((s, x) => s + x.total, 0),
+        }))
+        .sort((a, b2) => Math.abs(b2.total) - Math.abs(a.total));
+      for (const g of grupos) {
+        const chave = `u-${b.id}-${g.unidade ?? "s"}`;
+        const abertoU = abertos.has(chave);
+        fora.push(linhaFluxo({
+          chave, nivel, subtitulo: true, valores: g.valores, onClick: () => alternar(chave),
+          nome: <span className="inline-flex items-center gap-1">{abertoU ? <ChevronDown size={12} /> : <ChevronRight size={12} />}{rotuloUnidade(g.unidade)}</span>,
+        }));
+        if (!abertoU) continue;
+        for (const { l } of g.lista) fora.push(...linhasDoItem(l, nivel + 1));
+        fora.push(...linhaCriar(b, g.unidade, nivel + 1));
+      }
+      return fora;
     }
+
+    for (const { l } of itens) fora.push(...linhasDoItem(l, nivel));
     if (!premissa && itens.length === 0 && novo?.bloco !== b.id) {
-      fora.push(linhaTexto(`v-${b.id}`, "Nenhum lançamento neste período.", recuo));
+      fora.push(linhaTexto(`v-${b.id}`, "Nenhum lançamento neste período.", RECUO[nivel]));
     }
-    if (!onCriar) return fora;
-    if (novo?.bloco === b.id) {
-      fora.push(linhaNova(b, recuo));
-      if (erroNovo) fora.push(linhaTexto(`e-${b.id}`, <span className="text-red-600 dark:text-red-400">{erroNovo}</span>, recuo));
-    } else {
-      fora.push(linhaTexto(`+${b.id}`, <span className="inline-flex items-center gap-1"><Plus size={12} /> nova linha</span>, recuo, () => abrirNovo(b.id)));
-    }
+    fora.push(...linhaCriar(b, null, nivel));
     return fora;
   }
 
@@ -367,7 +450,8 @@ export default function VisaoFluxo({ blocos, lancamentos, premissas, saldos, onA
       )}
       <p className="text-xs text-[var(--text-muted)]">
         Saldo inicial de cada mês: o real do mês anterior quando informado; senão, o previsto do anterior — a mesma regra da planilha.
-        Clique num bloco para abrir os itens e num item para editar. Dentro do bloco aberto, <b>+ nova linha</b> cria um lançamento
+        Os blocos abrem em unidade, lançamento e fornecedor; clique num lançamento para editar e no fornecedor para escolher outro
+        no cadastro do ERP. Dentro do bloco aberto, <b>+ nova linha</b> cria um lançamento
         aqui mesmo: nome, valor nos meses e Enter para salvar (Esc cancela). O valor entra em R$ cheios, com o sinal do bloco —
         digite <b>+</b> ou <b>−</b> na frente para inverter.
       </p>
