@@ -17,6 +17,17 @@ const AZUL_ALT = "#1A1AD1";
 const TOLERANCIA = 0.05; // ±5%: dentro disso a previsão é considerada aderente
 const POR_PAGINA = 20;
 const SEM_VINCULO = "__sem_vinculo__";
+const REGRAS = "__regras__";
+
+// Grupos em que o ERP se divide (regra em fc_erp_base).
+const GRUPOS_ERP: { id: string; rotulo: string }[] = [
+  { id: "recebimentos", rotulo: "Recebimento de títulos de venda (clientes, cartão, cheque)" },
+  { id: "fornecedores", rotulo: "Contas a pagar em geral" },
+  { id: "estrategicos", rotulo: "Fornecedores com código no ERP (matérias-primas)" },
+  { id: "creditos", rotulo: "Créditos concedidos por esses fornecedores" },
+  { id: "financiamentos", rotulo: "Empréstimos e consórcios" },
+  { id: "investimentos", rotulo: "Contas a pagar – imobilizado" },
+];
 
 interface LinhaErp { mes: string; grupo: string; situacao: "realizado" | "aberto"; valor: number }
 interface PessoaErp { cd_pessoa: number; nome: string; valores: Map<string, number> }
@@ -49,6 +60,8 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
   const [milhares, setMilhares] = useState(true);
   const [erp, setErp] = useState<LinhaErp[]>([]);
   const [vinculos, setVinculos] = useState<Map<number, string>>(new Map());
+  const [regras, setRegras] = useState<Map<string, string>>(new Map()); // grupo do ERP → bloco
+  const [ligadoGrupo, setLigadoGrupo] = useState<Map<string, number>>(new Map()); // grupo|mês já contado por pessoa
   const [pessoas, setPessoas] = useState<Map<number, PessoaErp>>(new Map());
   const [soltas, setSoltas] = useState<{ linhas: Solta[]; total: number; carregando: boolean }>({ linhas: [], total: 0, carregando: false });
   const [sincronizado, setSincronizado] = useState<string | null>(null);
@@ -80,18 +93,20 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
     let vivo = true;
     (async () => {
       setCarregando(true); setErro("");
-      const [grade, vinc, sinc] = await Promise.all([
+      const [grade, vinc, regra, sinc] = await Promise.all([
         supabase.rpc("fc_cruzamento_erp", { p_empresa: empresaId, p_de: de, p_ate: ate }),
         supabase.from("fc_erp_vinculos").select("cd_pessoa, bloco_id").eq("empresa_id", empresaId),
+        supabase.from("fc_erp_vinculos_grupo").select("grupo, bloco_id").eq("empresa_id", empresaId),
         supabase.from("fc_erp_titulos_resumo").select("sincronizado_em").eq("empresa_id", empresaId)
           .order("sincronizado_em", { ascending: false }).limit(1),
       ]);
       if (!vivo) return;
-      const falha = grade.error ?? vinc.error ?? sinc.error;
+      const falha = grade.error ?? vinc.error ?? regra.error ?? sinc.error;
       if (falha) { setErro(falha.message); setCarregando(false); return; }
       setErp(((grade.data ?? []) as { mes: string; grupo: string; situacao: LinhaErp["situacao"]; valor: number | string }[])
         .map((r) => ({ mes: r.mes.slice(0, 10), grupo: r.grupo, situacao: r.situacao, valor: Number(r.valor) })));
       setVinculos(new Map(((vinc.data ?? []) as { cd_pessoa: number; bloco_id: string }[]).map((v) => [Number(v.cd_pessoa), v.bloco_id])));
+      setRegras(new Map(((regra.data ?? []) as { grupo: string; bloco_id: string }[]).map((r) => [r.grupo, r.bloco_id])));
       setSincronizado((sinc.data?.[0] as { sincronizado_em?: string } | undefined)?.sincronizado_em ?? null);
       setCarregando(false);
     })();
@@ -101,7 +116,7 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
   // Movimento no ERP de quem está ligado a um bloco.
   useEffect(() => {
     const alvo = [...pessoasLigadas.keys()];
-    if (empresaId !== 1 || alvo.length === 0 || meses.length === 0) { setPessoas(new Map()); return; }
+    if (empresaId !== 1 || alvo.length === 0 || meses.length === 0) { setPessoas(new Map()); setLigadoGrupo(new Map()); return; }
     let vivo = true;
     (async () => {
       const { data, error } = await supabase.rpc("fc_erp_grupo_pessoas", {
@@ -112,14 +127,20 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
       if (error) { setErro(error.message); return; }
       // A mesma pessoa pode aparecer em mais de um grupo/lado: junta tudo.
       const m = new Map<number, PessoaErp>();
+      const porGrupo = new Map<string, number>();
       for (const x of (data ?? []) as Record<string, unknown>[]) {
         const cd = Number(x.cd_pessoa);
         const atual = m.get(cd);
         const valores = paraMapa(x.valores);
         if (atual) atual.valores = somaMapas([atual.valores, valores]);
         else m.set(cd, { cd_pessoa: cd, nome: String(x.nome), valores });
+        valores.forEach((v, mes) => {
+          const k = `${String(x.grupo)}|${mes}`;
+          porGrupo.set(k, (porGrupo.get(k) ?? 0) + v);
+        });
       }
       setPessoas(m);
+      setLigadoGrupo(porGrupo);
     })();
     return () => { vivo = false; };
   }, [supabase, empresaId, de, ate, pessoasLigadas, meses.length]);
@@ -149,6 +170,14 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
 
   async function vincular(cd: number, bloco: string) {
     const { error } = await supabase.from("fc_erp_vinculos").upsert({ empresa_id: empresaId, cd_pessoa: cd, bloco_id: bloco });
+    if (error) { setErro(error.message); return; }
+    setVersao((v) => v + 1);
+  }
+
+  async function regraGrupo(grupo: string, bloco: string) {
+    const { error } = bloco
+      ? await supabase.from("fc_erp_vinculos_grupo").upsert({ empresa_id: empresaId, grupo, bloco_id: bloco })
+      : await supabase.from("fc_erp_vinculos_grupo").delete().eq("empresa_id", empresaId).eq("grupo", grupo);
     if (error) { setErro(error.message); return; }
     setVersao((v) => v + 1);
   }
@@ -195,6 +224,26 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
     return m;
   }, [erp, hoje]);
 
+  const totalGrupo = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of erp) {
+      const conta = r.mes < hoje ? r.situacao === "realizado" : r.mes > hoje ? r.situacao === "aberto" : true;
+      if (conta) m.set(`${r.grupo}|${r.mes}`, (m.get(`${r.grupo}|${r.mes}`) ?? 0) + r.valor);
+    }
+    return m;
+  }, [erp, hoje]);
+
+  // Grupo adotado por um bloco entra fechado: o total do grupo menos o que já
+  // veio por vínculo de fornecedor, para nada contar duas vezes.
+  const restoDoGrupo = useCallback((grupo: string) => {
+    const m = new Map<string, number>();
+    for (const mes of meses) {
+      const v = Math.round(((totalGrupo.get(`${grupo}|${mes}`) ?? 0) - (ligadoGrupo.get(`${grupo}|${mes}`) ?? 0)) * 100) / 100;
+      if (v) m.set(mes, v);
+    }
+    return m;
+  }, [meses, totalGrupo, ligadoGrupo]);
+
   const sistemaBloco = useMemo(() => {
     const m = new Map<string, number>();
     for (const [cd, bloco] of pessoasLigadas) {
@@ -202,16 +251,31 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
       if (!p) continue;
       p.valores.forEach((v, mes) => m.set(`${bloco}|${mes}`, (m.get(`${bloco}|${mes}`) ?? 0) + v));
     }
+    for (const [grupo, bloco] of regras) {
+      for (const mes of meses) {
+        const v = Math.round(((totalGrupo.get(`${grupo}|${mes}`) ?? 0) - (ligadoGrupo.get(`${grupo}|${mes}`) ?? 0)) * 100) / 100;
+        if (v) m.set(`${bloco}|${mes}`, (m.get(`${bloco}|${mes}`) ?? 0) + v);
+      }
+    }
     return m;
-  }, [pessoasLigadas, pessoas]);
+  }, [pessoasLigadas, pessoas, regras, meses, totalGrupo, ligadoGrupo]);
 
   const semVinculo = useMemo(() => {
     const ligado = new Map<string, number>();
     for (const p of pessoas.values()) p.valores.forEach((v, mes) => ligado.set(mes, (ligado.get(mes) ?? 0) + v));
+    for (const [grupo] of regras) {
+      for (const mes of meses) {
+        const v = (totalGrupo.get(`${grupo}|${mes}`) ?? 0) - (ligadoGrupo.get(`${grupo}|${mes}`) ?? 0);
+        if (v) ligado.set(mes, (ligado.get(mes) ?? 0) + v);
+      }
+    }
     const m = new Map<string, number>();
-    for (const mes of meses) m.set(mes, Math.round(((totalErp.get(mes) ?? 0) - (ligado.get(mes) ?? 0)) * 100) / 100);
+    for (const mes of meses) {
+      const v = Math.round(((totalErp.get(mes) ?? 0) - (ligado.get(mes) ?? 0)) * 100) / 100;
+      if (v) m.set(mes, v);
+    }
     return m;
-  }, [pessoas, totalErp, meses]);
+  }, [pessoas, totalErp, meses, regras, totalGrupo, ligadoGrupo]);
 
   // ---------- árvore de blocos ----------
   const filhosDe = useCallback((id: string | null) => blocos.filter((b) => (b.pai_id ?? null) === id), [blocos]);
@@ -348,6 +412,20 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
         ),
       }));
     }
+    // Grupo inteiro do ERP adotado por este bloco: entra fechado, sem listar
+    // cliente por cliente.
+    for (const [grupo, bloco] of regras) {
+      if (bloco !== b.id) continue;
+      const rotulo = GRUPOS_ERP.find((g) => g.id === grupo)?.rotulo ?? grupo;
+      fora.push(linha({
+        chave: `rg-${b.id}-${grupo}`, nivel: nivel + 1, sistema: restoDoGrupo(grupo),
+        titulo: "Grupo inteiro do ERP, fechado: não abre por cliente",
+        nome: <span className="inline-flex items-center gap-1"><i>{rotulo}</i>
+          <span className="rounded bg-[#EEEEFD] px-1 text-[9px] font-bold uppercase text-[#0000C2] dark:bg-[#262f6b] dark:text-[#c7c9ff]">grupo</span>
+        </span>,
+      }));
+    }
+
     // O que o bloco prevê sem apontar fornecedor nenhum.
     const semFornecedor = new Map<string, number>();
     for (const mes of meses) {
@@ -424,6 +502,29 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
         </span>, 1, () => { if (!soltas.carregando) carregarSoltas(soltas.linhas.length); }));
     } else if (soltas.total === 0 && !soltas.carregando) {
       linhaTexto("s-vazio", "Todo o movimento do ERP está vinculado a um bloco.", 1);
+    }
+  }
+
+  // Regras por grupo do ERP, para ajustar sem sair da tela.
+  const abertoRegras = abertos.has(REGRAS);
+  linhas.push(linhaTexto("b-regras",
+    <span className="inline-flex items-center gap-1 font-semibold text-[var(--text)]">
+      {abertoRegras ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+      Grupos do ERP ligados direto a um bloco
+      <span className="font-normal text-[10px] text-[var(--text-muted)]">· entram fechados, sem abrir por cliente</span>
+    </span>, 0, () => alternar(REGRAS)));
+  if (abertoRegras) {
+    for (const g of GRUPOS_ERP) {
+      const bloco = regras.get(g.id);
+      linhas.push(linhaTexto(`rg-${g.id}`,
+        <span className="inline-flex flex-wrap items-center gap-1">
+          {g.rotulo}
+          <select value={bloco ?? ""} onChange={(e) => regraGrupo(g.id, e.target.value)}
+            className="ml-2 max-w-64 rounded border border-[var(--border)] bg-[var(--surface)] px-1 py-0.5 text-[10px] text-[var(--text)]">
+            <option value="">fornecedor a fornecedor</option>
+            {opcoesBloco.map((o) => <option key={o.id} value={o.id}>{o.rotulo}</option>)}
+          </select>
+        </span>, 1));
     }
   }
 
