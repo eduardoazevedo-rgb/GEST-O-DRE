@@ -15,7 +15,7 @@ import {
 const AZUL = "#0000C2";
 const AZUL_ALT = "#1A1AD1";
 const TOLERANCIA = 0.05; // ±5%: dentro disso a previsão é considerada aderente
-const POR_PAGINA = 20;
+const POR_PAGINA = 50;
 const SEM_VINCULO = "__sem_vinculo__";
 const REGRAS = "__regras__";
 
@@ -67,7 +67,8 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
   const [sincronizado, setSincronizado] = useState<string | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState("");
-  const [abertos, setAbertos] = useState<Set<string>>(new Set());
+  // A seção das regras já começa aberta: é o atalho para ligar grupo inteiro.
+  const [abertos, setAbertos] = useState<Set<string>>(new Set([REGRAS]));
   const [versao, setVersao] = useState(0); // sobe a cada vínculo criado ou desfeito
 
   const meses = useMemo(() => (de <= ate ? listarMeses(de, ate) : []), [de, ate]);
@@ -160,6 +161,27 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
       total: linhas[0] ? Number(linhas[0].total_pessoas) : (offset === 0 ? 0 : s.total),
       carregando: false,
     }));
+  }, [supabase, empresaId, de, ate]);
+
+  const carregarTodas = useCallback(async () => {
+    setSoltas((s) => ({ ...s, carregando: true }));
+    let pagina = 0;
+    const todas: Solta[] = [];
+    let total = 0;
+    for (;;) {
+      const { data, error } = await supabase.rpc("fc_erp_nao_vinculados", {
+        p_empresa: empresaId, p_de: de, p_ate: ate, p_limite: 200, p_offset: pagina * 200,
+      });
+      if (error) { setErro(error.message); break; }
+      const linhas = (data ?? []) as Record<string, unknown>[];
+      if (linhas[0]) total = Number(linhas[0].total_pessoas);
+      todas.push(...linhas.map((x) => ({
+        cd_pessoa: Number(x.cd_pessoa), nome: String(x.nome), grupo: String(x.grupo), valores: paraMapa(x.valores),
+      })));
+      if (linhas.length < 200 || todas.length >= total) break;
+      pagina += 1;
+    }
+    setSoltas({ linhas: todas, total, carregando: false });
   }, [supabase, empresaId, de, ate]);
 
   // Lista de soltos só quando a seção está aberta.
@@ -350,7 +372,7 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
           opts.zebra && "bg-[#F1F2F6] dark:bg-neutral-800", opts.onClick && "cursor-pointer",
           opts.nivel === 0 && "border-t-slate-300 dark:border-t-slate-600")}>
         <td style={{ paddingLeft: recuo(opts.nivel) }} title={opts.titulo}
-          className={cn("sticky left-0 z-10 max-w-[24rem] truncate whitespace-nowrap py-1.5 pr-3 shadow-[2px_0_4px_rgba(0,0,0,0.05)]",
+          className={cn("sticky left-0 z-10 max-w-[38rem] truncate whitespace-nowrap py-1.5 pr-3 shadow-[2px_0_4px_rgba(0,0,0,0.05)]",
             bg, "group-hover:bg-[#EDEDFA] dark:group-hover:bg-[#191934]",
             opts.forte ? "font-semibold text-[var(--text)]" : "text-[var(--text-muted)]")}>
           {opts.nome}
@@ -379,7 +401,7 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
   const seletorBloco = (cd: number, atual?: string) => (
     <select value={atual ?? ""} onClick={(e) => e.stopPropagation()}
       onChange={(e) => { if (e.target.value) vincular(cd, e.target.value); }}
-      className="ml-2 max-w-56 rounded border border-[var(--border)] bg-[var(--surface)] px-1 py-0.5 text-[10px] text-[var(--text)]">
+      className="ml-2 max-w-64 shrink-0 rounded border border-[var(--border)] bg-[var(--surface)] px-1 py-0.5 text-[10px] text-[var(--text)]">
       <option value="">vincular a…</option>
       {opcoesBloco.map((o) => <option key={o.id} value={o.id}>{o.rotulo}</option>)}
     </select>
@@ -494,12 +516,17 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
       linhas.push(linhaTexto("s-carregando", <><Loader2 size={12} className="mr-1 inline animate-spin" />carregando fornecedores…</>, 1));
     } else if (soltas.total > soltas.linhas.length) {
       linhas.push(linhaTexto("s-mais",
-        <span className="inline-flex items-center gap-1.5">
+        <span className="inline-flex items-center gap-2">
           Mais {(soltas.total - soltas.linhas.length).toLocaleString("pt-BR")} sem vínculo
-          <span className="rounded border border-[var(--border)] bg-[var(--surface)] px-1.5 text-[10px] font-semibold text-[var(--text)]">
+          <button onClick={(e) => { e.stopPropagation(); if (!soltas.carregando) carregarSoltas(soltas.linhas.length); }}
+            className="rounded border border-[var(--border)] bg-[var(--surface)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--text)] hover:text-[var(--primary)]">
             {soltas.carregando ? <Loader2 size={10} className="inline animate-spin" /> : `+ ${POR_PAGINA}`}
-          </span>
-        </span>, 1, () => { if (!soltas.carregando) carregarSoltas(soltas.linhas.length); }));
+          </button>
+          <button onClick={(e) => { e.stopPropagation(); if (!soltas.carregando) carregarTodas(); }}
+            className="rounded border border-[var(--border)] bg-[var(--surface)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--text)] hover:text-[var(--primary)]">
+            mostrar todos
+          </button>
+        </span>, 1));
     } else if (soltas.total === 0 && !soltas.carregando) {
       linhaTexto("s-vazio", "Todo o movimento do ERP está vinculado a um bloco.", 1);
     }
@@ -566,7 +593,7 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
           <table className="min-w-full text-xs">
             <thead>
               <tr className="text-white">
-                <th rowSpan={2} style={{ backgroundColor: AZUL }} className="sticky left-0 top-0 z-30 min-w-64 px-3 py-2 text-left font-semibold">
+                <th rowSpan={2} style={{ backgroundColor: AZUL }} className="sticky left-0 top-0 z-30 min-w-80 px-3 py-2 text-left font-semibold">
                   Bloco / fornecedor {milhares && <span className="font-normal opacity-75">· R$ mil</span>}
                 </th>
                 {meses.map((m, i) => (
