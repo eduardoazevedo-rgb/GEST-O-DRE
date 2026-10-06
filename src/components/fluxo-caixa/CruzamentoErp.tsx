@@ -593,7 +593,7 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
           <table className="min-w-full text-xs">
             <thead>
               <tr className="text-white">
-                <th rowSpan={2} style={{ backgroundColor: AZUL }} className="sticky left-0 top-0 z-30 min-w-80 px-3 py-2 text-left font-semibold">
+                <th rowSpan={2} style={{ backgroundColor: AZUL }} className="sticky left-0 top-0 z-30 min-w-[28rem] px-3 py-2 text-left font-semibold">
                   Bloco / fornecedor {milhares && <span className="font-normal opacity-75">· R$ mil</span>}
                 </th>
                 {meses.map((m, i) => (
