@@ -186,7 +186,7 @@ export default function FluxoCaixaPage() {
         <VisaoFluxo blocos={blocos} lancamentos={lancamentos} premissas={premissas} saldos={saldos} filiais={filiais}
           nomesPessoas={nomesPessoas} onAbrir={abrir} onCriar={criarLinha} onFornecedor={definirFornecedor} />
       ) : aba === "cruzamento" ? (
-        <CruzamentoErp empresaId={empresaId} lancamentos={lancamentos} premissas={premissas} />
+        <CruzamentoErp empresaId={empresaId} blocos={blocos} lancamentos={lancamentos} premissas={premissas} />
       ) : aba === "realizado" ? (
         <RealizadoErp empresaId={empresaId} />
       ) : aba === "lancamentos" ? (

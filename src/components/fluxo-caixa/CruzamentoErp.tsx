@@ -1,320 +1,243 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
-import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
+import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { ChevronDown, ChevronRight, Loader2, X } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import {
   formatGrade, formatReais, listarMeses, mesDe, rotuloMes, somarMeses,
-  type Lancamento, type Premissa,
+  type Bloco, type Lancamento, type Premissa,
 } from "@/lib/fluxo-caixa";
 
-// Cada linha do cruzamento junta blocos do controle manual e o grupo
-// correspondente no ERP (a regra de cada grupo está em fc_cruzamento_erp).
-const GRUPOS = [
-  { id: "recebimentos", rotulo: "Recebimentos de clientes", blocos: ["recebimentos"], erp: "Títulos a receber: contas, cartão e cheque" },
-  { id: "fornecedores", rotulo: "Fornecedores gerais", blocos: ["fornecedores", "seguros", "aluguel_predial", "pessoal", "tributos", "tributos_folha", "tributos_vendas", "tributos_lucro", "tributos_taxas"], erp: "Contas a pagar, fora os grupos abaixo" },
-  { id: "estrategicos", rotulo: "Fornecedores matérias-primas", blocos: ["estrategicos"], erp: "O que se paga aos fornecedores com código no campo \"Códigos no ERP\"" },
-  { id: "creditos", rotulo: "Créditos de fornecedores", blocos: ["creditos_fornecedores"], erp: "Créditos concedidos por esses fornecedores (a receber, tipos 24 e 103)" },
-  { id: "financiamentos", rotulo: "Financiamentos", blocos: ["financiamentos"], erp: "Empréstimos (tipos 18, 19) e consórcios (41 a 43)" },
-  { id: "investimentos", rotulo: "Investimentos, veículos e SSMA", blocos: ["investimentos", "benfeitoria", "contratos", "veiculos", "ssma"], erp: "Contas a pagar – imobilizado (tipo 34)" },
-] as const;
-type GrupoId = (typeof GRUPOS)[number]["id"];
-const GRUPO_DO_BLOCO = new Map<string, GrupoId>(GRUPOS.flatMap((g) => g.blocos.map((b) => [b, g.id] as const)));
-
+// As linhas são os mesmos blocos do fluxo próprio; o lado do sistema vem do que
+// está vinculado — fornecedor apontado na linha do lançamento ou na tabela de
+// vínculos. O que ninguém reclamou cai em "sem vínculo".
 const AZUL = "#0000C2";
 const AZUL_ALT = "#1A1AD1";
 const TOLERANCIA = 0.05; // ±5%: dentro disso a previsão é considerada aderente
-const POR_PAGINA = 20;   // clientes/fornecedores por vez ao abrir um grupo
+const POR_PAGINA = 20;
+const SEM_VINCULO = "__sem_vinculo__";
 
-interface LinhaErp { mes: string; grupo: GrupoId; situacao: "realizado" | "aberto"; qtd: number; valor: number }
-interface PessoaErp { cd_pessoa: number; nome: string; lado: "receber" | "pagar"; valores: Map<string, number>; previsto?: boolean }
-interface PessoasGrupo { linhas: PessoaErp[]; total: number; carregando: boolean }
+interface LinhaErp { mes: string; grupo: string; situacao: "realizado" | "aberto"; valor: number }
+interface PessoaErp { cd_pessoa: number; nome: string; valores: Map<string, number> }
+interface Solta { cd_pessoa: number; nome: string; grupo: string; valores: Map<string, number> }
 
 interface Props {
   empresaId: number;
+  blocos: Bloco[];
   lancamentos: Lancamento[];
   premissas: Premissa[];
 }
 
 const mesAtual = () => { const h = new Date(); return `${h.getFullYear()}-${String(h.getMonth() + 1).padStart(2, "0")}-01`; };
+const paraMapa = (o: unknown) => new Map(Object.entries((o ?? {}) as Record<string, number | string>).map(([k, v]) => [k, Number(v)]));
+const somaMapas = (ms: (Map<string, number> | undefined)[]) => {
+  const out = new Map<string, number>();
+  for (const m of ms) m?.forEach((v, k) => out.set(k, (out.get(k) ?? 0) + v));
+  return out;
+};
+const recuo = (nivel: number) => 12 + nivel * 24;
 
-export default function CruzamentoErp({ empresaId, lancamentos, premissas }: Props) {
+export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissas }: Props) {
   const supabase = useMemo(() => createClient(), []);
   const hoje = mesAtual();
   const inicioAno = `${hoje.slice(0, 4)}-01-01`;
   const opcoes = listarMeses("2025-01-01", somarMeses(hoje, 24));
 
   const [de, setDe] = useState(inicioAno);
-  const [ate, setAte] = useState(somarMeses(hoje, 5));
+  const [ate, setAte] = useState(somarMeses(inicioAno, 11));
   const [milhares, setMilhares] = useState(true);
   const [erp, setErp] = useState<LinhaErp[]>([]);
-  const [vencidos, setVencidos] = useState<{ receber: number; pagar: number }>({ receber: 0, pagar: 0 });
+  const [vinculos, setVinculos] = useState<Map<number, string>>(new Map());
+  const [pessoas, setPessoas] = useState<Map<number, PessoaErp>>(new Map());
+  const [soltas, setSoltas] = useState<{ linhas: Solta[]; total: number; carregando: boolean }>({ linhas: [], total: 0, carregando: false });
   const [sincronizado, setSincronizado] = useState<string | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState("");
-  // Quem está por trás do número do sistema, carregado só quando o grupo abre.
-  const [abertos, setAbertos] = useState<Set<GrupoId>>(new Set());
-  const chavePessoas = `${empresaId}|${de}|${ate}`;
-  const [carregados, setCarregados] = useState<{ chave: string; grupos: Partial<Record<GrupoId, PessoasGrupo>> }>({ chave: "", grupos: {} });
-  const [nomesPrevisto, setNomesPrevisto] = useState<Map<number, string>>(new Map());
-  const pessoas = carregados.chave === chavePessoas ? carregados.grupos : {};
+  const [abertos, setAbertos] = useState<Set<string>>(new Set());
+  const [versao, setVersao] = useState(0); // sobe a cada vínculo criado ou desfeito
 
   const meses = useMemo(() => (de <= ate ? listarMeses(de, ate) : []), [de, ate]);
+
+  // Fornecedores já ligados a algum bloco: pelo vínculo ou pela linha do previsto.
+  const pessoasLigadas = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const l of lancamentos) {
+      if (l.status === "cancelado") continue;
+      if (l.cd_pessoa != null && !m.has(l.cd_pessoa)) m.set(l.cd_pessoa, l.bloco_id);
+      // os códigos digitados em "Códigos no ERP" valem como vínculo do bloco
+      for (const parte of (l.codigos_erp ?? "").split(/[^0-9]+/)) {
+        const cd = Number(parte);
+        if (parte && Number.isFinite(cd) && !m.has(cd)) m.set(cd, l.bloco_id);
+      }
+    }
+    for (const [cd, bloco] of vinculos) m.set(cd, bloco); // o vínculo explícito manda
+    return m;
+  }, [lancamentos, vinculos]);
 
   useEffect(() => {
     if (empresaId !== 1 || meses.length === 0) { setCarregando(false); return; }
     let vivo = true;
     (async () => {
       setCarregando(true); setErro("");
-      const antes = somarMeses(hoje, -1);
-      const [grade, atrasados, sinc] = await Promise.all([
+      const [grade, vinc, sinc] = await Promise.all([
         supabase.rpc("fc_cruzamento_erp", { p_empresa: empresaId, p_de: de, p_ate: ate }),
-        supabase.rpc("fc_cruzamento_erp", { p_empresa: empresaId, p_de: "2000-01-01", p_ate: antes }),
+        supabase.from("fc_erp_vinculos").select("cd_pessoa, bloco_id").eq("empresa_id", empresaId),
         supabase.from("fc_erp_titulos_resumo").select("sincronizado_em").eq("empresa_id", empresaId)
           .order("sincronizado_em", { ascending: false }).limit(1),
       ]);
       if (!vivo) return;
-      const falha = grade.error ?? atrasados.error ?? sinc.error;
+      const falha = grade.error ?? vinc.error ?? sinc.error;
       if (falha) { setErro(falha.message); setCarregando(false); return; }
-      const norm = (rows: unknown[] | null) => (rows ?? []).map((r) => {
-        const x = r as { mes: string; grupo: GrupoId; situacao: "realizado" | "aberto"; qtd: number | string; valor: number | string };
-        return { mes: x.mes.slice(0, 10), grupo: x.grupo, situacao: x.situacao, qtd: Number(x.qtd), valor: Number(x.valor) };
-      });
-      setErp(norm(grade.data));
-      const abertosAntigos = norm(atrasados.data).filter((r) => r.situacao === "aberto");
-      setVencidos({
-        receber: abertosAntigos.filter((r) => r.grupo === "recebimentos").reduce((s, r) => s + r.valor, 0),
-        pagar: abertosAntigos.filter((r) => r.grupo !== "recebimentos").reduce((s, r) => s + r.valor, 0),
-      });
+      setErp(((grade.data ?? []) as { mes: string; grupo: string; situacao: LinhaErp["situacao"]; valor: number | string }[])
+        .map((r) => ({ mes: r.mes.slice(0, 10), grupo: r.grupo, situacao: r.situacao, valor: Number(r.valor) })));
+      setVinculos(new Map(((vinc.data ?? []) as { cd_pessoa: number; bloco_id: string }[]).map((v) => [Number(v.cd_pessoa), v.bloco_id])));
       setSincronizado((sinc.data?.[0] as { sincronizado_em?: string } | undefined)?.sincronizado_em ?? null);
       setCarregando(false);
     })();
     return () => { vivo = false; };
-  }, [supabase, empresaId, de, ate, hoje, meses.length]);
+  }, [supabase, empresaId, de, ate, versao, meses.length]);
 
-  // Previsto manual por grupo e mês (mesma base da Visão: parcelas ativas + premissas).
-  const previsto = useMemo(() => {
+  // Movimento no ERP de quem está ligado a um bloco.
+  useEffect(() => {
+    const alvo = [...pessoasLigadas.keys()];
+    if (empresaId !== 1 || alvo.length === 0 || meses.length === 0) { setPessoas(new Map()); return; }
+    let vivo = true;
+    (async () => {
+      const { data, error } = await supabase.rpc("fc_erp_grupo_pessoas", {
+        p_empresa: empresaId, p_de: de, p_ate: ate, p_grupo: null, p_busca: null,
+        p_limite: 2000, p_offset: 0, p_pessoas: alvo,
+      });
+      if (!vivo) return;
+      if (error) { setErro(error.message); return; }
+      // A mesma pessoa pode aparecer em mais de um grupo/lado: junta tudo.
+      const m = new Map<number, PessoaErp>();
+      for (const x of (data ?? []) as Record<string, unknown>[]) {
+        const cd = Number(x.cd_pessoa);
+        const atual = m.get(cd);
+        const valores = paraMapa(x.valores);
+        if (atual) atual.valores = somaMapas([atual.valores, valores]);
+        else m.set(cd, { cd_pessoa: cd, nome: String(x.nome), valores });
+      }
+      setPessoas(m);
+    })();
+    return () => { vivo = false; };
+  }, [supabase, empresaId, de, ate, pessoasLigadas, meses.length]);
+
+  const carregarSoltas = useCallback(async (offset: number) => {
+    setSoltas((s) => ({ ...s, carregando: true }));
+    const { data, error } = await supabase.rpc("fc_erp_nao_vinculados", {
+      p_empresa: empresaId, p_de: de, p_ate: ate, p_limite: POR_PAGINA, p_offset: offset,
+    });
+    if (error) { setErro(error.message); setSoltas((s) => ({ ...s, carregando: false })); return; }
+    const linhas = (data ?? []) as Record<string, unknown>[];
+    const novas = linhas.map((x) => ({
+      cd_pessoa: Number(x.cd_pessoa), nome: String(x.nome), grupo: String(x.grupo), valores: paraMapa(x.valores),
+    }));
+    setSoltas((s) => ({
+      linhas: offset === 0 ? novas : [...s.linhas, ...novas],
+      total: linhas[0] ? Number(linhas[0].total_pessoas) : (offset === 0 ? 0 : s.total),
+      carregando: false,
+    }));
+  }, [supabase, empresaId, de, ate]);
+
+  // Lista de soltos só quando a seção está aberta.
+  useEffect(() => {
+    if (!abertos.has(SEM_VINCULO) || empresaId !== 1 || meses.length === 0) return;
+    carregarSoltas(0);
+  }, [abertos, carregarSoltas, empresaId, meses.length, versao]);
+
+  async function vincular(cd: number, bloco: string) {
+    const { error } = await supabase.from("fc_erp_vinculos").upsert({ empresa_id: empresaId, cd_pessoa: cd, bloco_id: bloco });
+    if (error) { setErro(error.message); return; }
+    setVersao((v) => v + 1);
+  }
+
+  async function desvincular(cd: number) {
+    const { error } = await supabase.from("fc_erp_vinculos").delete().eq("empresa_id", empresaId).eq("cd_pessoa", cd);
+    if (error) { setErro(error.message); return; }
+    setVersao((v) => v + 1);
+  }
+
+  // ---------- previsto (controle manual) ----------
+  const previstoBloco = useMemo(() => {
     const m = new Map<string, number>();
-    const somar = (g: GrupoId | undefined, mes: string, v: number) => { if (g) m.set(`${g}|${mes}`, (m.get(`${g}|${mes}`) ?? 0) + v); };
+    const somar = (bloco: string, mes: string, v: number) => m.set(`${bloco}|${mes}`, (m.get(`${bloco}|${mes}`) ?? 0) + v);
     for (const l of lancamentos) {
       if (l.status === "cancelado") continue;
-      for (const p of l.parcelas) somar(GRUPO_DO_BLOCO.get(l.bloco_id), mesDe(p.vencimento), p.valor);
+      for (const p of l.parcelas) somar(l.bloco_id, mesDe(p.vencimento), p.valor);
     }
     for (const p of premissas) somar(p.tipo === "clientes" ? "recebimentos" : "fornecedores", p.mes, p.valor);
     return m;
   }, [lancamentos, premissas]);
 
-  // Previsto por fornecedor: as linhas do controle manual que apontam alguém do ERP.
+  // previsto por fornecedor, dentro de cada bloco
   const previstoPessoa = useMemo(() => {
     const m = new Map<string, number>();
     for (const l of lancamentos) {
       if (l.status === "cancelado" || l.cd_pessoa == null) continue;
       for (const p of l.parcelas) {
-        const k = `${l.cd_pessoa}|${mesDe(p.vencimento)}`;
+        const k = `${l.bloco_id}|${l.cd_pessoa}|${mesDe(p.vencimento)}`;
         m.set(k, (m.get(k) ?? 0) + p.valor);
       }
     }
     return m;
   }, [lancamentos]);
 
-  // Fornecedores com linha no previsto, por grupo — sempre aparecem ao abrir.
-  const pessoasDoGrupo = useMemo(() => {
-    const m = new Map<GrupoId, number[]>();
-    for (const l of lancamentos) {
-      if (l.status === "cancelado" || l.cd_pessoa == null) continue;
-      const g = GRUPO_DO_BLOCO.get(l.bloco_id);
-      if (!g) continue;
-      const atual = m.get(g) ?? [];
-      if (!atual.includes(l.cd_pessoa)) m.set(g, [...atual, l.cd_pessoa]);
-    }
-    return m;
-  }, [lancamentos]);
-
-  // Sistema: mês passado = realizado; mês atual = realizado + ainda em aberto no mês; futuro = já lançado.
-  const sistema = useMemo(() => {
+  // ---------- sistema (ERP) ----------
+  // Sistema: mês passado = realizado; mês atual = realizado + ainda em aberto; futuro = já lançado.
+  const totalErp = useMemo(() => {
     const m = new Map<string, number>();
     for (const r of erp) {
       const conta = r.mes < hoje ? r.situacao === "realizado" : r.mes > hoje ? r.situacao === "aberto" : true;
-      if (conta) m.set(`${r.grupo}|${r.mes}`, (m.get(`${r.grupo}|${r.mes}`) ?? 0) + r.valor);
+      if (conta) m.set(r.mes, (m.get(r.mes) ?? 0) + r.valor);
     }
     return m;
   }, [erp, hoje]);
 
+  const sistemaBloco = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const [cd, bloco] of pessoasLigadas) {
+      const p = pessoas.get(cd);
+      if (!p) continue;
+      p.valores.forEach((v, mes) => m.set(`${bloco}|${mes}`, (m.get(`${bloco}|${mes}`) ?? 0) + v));
+    }
+    return m;
+  }, [pessoasLigadas, pessoas]);
+
+  const semVinculo = useMemo(() => {
+    const ligado = new Map<string, number>();
+    for (const p of pessoas.values()) p.valores.forEach((v, mes) => ligado.set(mes, (ligado.get(mes) ?? 0) + v));
+    const m = new Map<string, number>();
+    for (const mes of meses) m.set(mes, Math.round(((totalErp.get(mes) ?? 0) - (ligado.get(mes) ?? 0)) * 100) / 100);
+    return m;
+  }, [pessoas, totalErp, meses]);
+
+  // ---------- árvore de blocos ----------
+  const filhosDe = useCallback((id: string | null) => blocos.filter((b) => (b.pai_id ?? null) === id), [blocos]);
+
+  const somaDaArvore = useCallback((bloco: string, fonte: Map<string, number>): Map<string, number> => {
+    const proprio = new Map<string, number>();
+    for (const mes of meses) {
+      const v = fonte.get(`${bloco}|${mes}`);
+      if (v) proprio.set(mes, v);
+    }
+    return somaMapas([proprio, ...filhosDe(bloco).map((f) => somaDaArvore(f.id, fonte))]);
+  }, [meses, filhosDe]);
+
+  const alternar = (id: string) =>
+    setAbertos((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+
+  if (empresaId !== 1) {
+    return <p className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-8 text-center text-sm text-[var(--text-muted)]">
+      O cruzamento com o ERP está disponível só para a renovadora (empresas 1000 a 1024) por enquanto.
+    </p>;
+  }
+
   const rotuloSistema = (mes: string) => (mes < hoje ? "Realizado" : mes > hoje ? "No ERP" : "Real.+aberto");
 
-  async function carregarGrupo(g: GrupoId, offset: number) {
-    const k = chavePessoas;
-    setCarregados((c) => {
-      const base = c.chave === k ? c.grupos : {};
-      return { chave: k, grupos: { ...base, [g]: { linhas: base[g]?.linhas ?? [], total: base[g]?.total ?? 0, carregando: true } } };
-    });
-    const alvo = offset === 0 ? (pessoasDoGrupo.get(g) ?? []) : [];
-    const [topo, doPrevisto] = await Promise.all([
-      supabase.rpc("fc_erp_grupo_pessoas", {
-        p_empresa: empresaId, p_de: de, p_ate: ate, p_grupo: g, p_busca: null, p_limite: POR_PAGINA, p_offset: offset,
-      }),
-      alvo.length
-        ? supabase.rpc("fc_erp_grupo_pessoas", {
-            p_empresa: empresaId, p_de: de, p_ate: ate, p_grupo: g, p_busca: null, p_limite: 500, p_offset: 0, p_pessoas: alvo,
-          })
-        : Promise.resolve({ data: [], error: null }),
-    ]);
-    const falha = topo.error ?? doPrevisto.error;
-    if (falha) {
-      setErro(falha.message);
-      setCarregados((c) => (c.chave !== k || !c.grupos[g] ? c : { chave: k, grupos: { ...c.grupos, [g]: { ...c.grupos[g]!, carregando: false } } }));
-      return;
-    }
-    const converter = (linhas: Record<string, unknown>[], previsto: boolean) => linhas.map((x) => ({
-      cd_pessoa: Number(x.cd_pessoa), nome: String(x.nome), lado: x.lado as PessoaErp["lado"], previsto,
-      valores: new Map(Object.entries((x.valores ?? {}) as Record<string, number | string>).map(([m, v]) => [m, Number(v)])),
-    }));
-    const linhas = (topo.data ?? []) as Record<string, unknown>[];
-    const fixas = converter((doPrevisto.data ?? []) as Record<string, unknown>[], true);
-    // Fornecedor com previsto e sem nenhum título no ERP: entra zerado, para a
-    // diferença aparecer em vez de sumir da tela.
-    const semTitulo = alvo
-      .filter((cd) => !fixas.some((p) => p.cd_pessoa === cd))
-      .map((cd) => ({ cd_pessoa: cd, nome: nomesPrevisto.get(cd) ?? `Pessoa ${cd}`, lado: "pagar" as const, previsto: true, valores: new Map<string, number>() }));
-
-    setCarregados((c) => {
-      if (c.chave !== k) return c;
-      const atual = c.grupos[g];
-      const anteriores = offset === 0 ? [] : atual?.linhas ?? [];
-      const doTopo = converter(linhas, false);
-      const juntas = offset === 0 ? [...fixas, ...semTitulo, ...doTopo] : [...anteriores, ...doTopo];
-      // Sem repetir quem já veio como fornecedor do previsto.
-      const vistos = new Set<string>();
-      const linhasFinais = juntas.filter((p) => {
-        const id = `${p.cd_pessoa}|${p.lado}`;
-        if (vistos.has(id)) return false;
-        vistos.add(id);
-        return true;
-      });
-      return {
-        chave: k,
-        grupos: {
-          ...c.grupos,
-          [g]: {
-            linhas: linhasFinais,
-            total: linhas[0] ? Number(linhas[0].total_pessoas) : (offset === 0 ? fixas.length : atual?.total ?? 0),
-            carregando: false,
-          },
-        },
-      };
-    });
-  }
-
-  function alternar(g: GrupoId) {
-    const abrir = !abertos.has(g);
-    setAbertos((prev) => { const n = new Set(prev); if (abrir) n.add(g); else n.delete(g); return n; });
-    if (abrir && !pessoas[g]) carregarGrupo(g, 0);
-  }
-
-  // Nomes dos fornecedores apontados nas linhas do previsto.
-  useEffect(() => {
-    const cds = [...new Set(lancamentos.filter((l) => l.cd_pessoa != null).map((l) => l.cd_pessoa as number))];
-    if (cds.length === 0) { setNomesPrevisto(new Map()); return; }
-    let vivo = true;
-    supabase.from("fc_erp_pessoas").select("cd_pessoa, nome").in("cd_pessoa", cds)
-      .then(({ data }) => {
-        if (!vivo) return;
-        setNomesPrevisto(new Map(((data ?? []) as { cd_pessoa: number; nome: string }[]).map((p) => [Number(p.cd_pessoa), p.nome])));
-      });
-    return () => { vivo = false; };
-  }, [supabase, lancamentos]);
-
-  // Trocou o período: recarrega os grupos que estão abertos.
-  useEffect(() => {
-    if (empresaId !== 1 || de > ate) return;
-    abertos.forEach((g) => { carregarGrupo(g, 0); });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chavePessoas]);
-
-  // Linha de um cliente/fornecedor: previsto vem das linhas com esse fornecedor.
-  function linhaPessoa(chave: string, nome: ReactNode, valores: Map<string, number>, cd: number | null, onClick?: () => void) {
-    return (
-      <tr key={chave} onClick={onClick}
-        className={cn("group border-t border-[var(--border)] hover:bg-[#EDEDFA] dark:hover:bg-[#191934]", onClick && "cursor-pointer")}>
-        <td className="sticky left-0 z-10 max-w-[22rem] truncate whitespace-nowrap bg-[var(--surface)] py-1 pl-8 pr-3 text-[var(--text-muted)] shadow-[2px_0_4px_rgba(0,0,0,0.05)] group-hover:bg-[#EDEDFA] dark:group-hover:bg-[#191934]">
-          {nome}
-        </td>
-        {celulasValores(
-          (mes) => (cd == null ? 0 : previstoPessoa.get(`${cd}|${mes}`) ?? 0),
-          (mes) => valores.get(mes) ?? 0,
-          false, true,
-        )}
-      </tr>
-    );
-  }
-
-  function linhasDoGrupo(g: (typeof GRUPOS)[number]) {
-    const pg = pessoas[g.id];
-    const lista = pg?.linhas ?? [];
-    const quem = g.id === "recebimentos" ? "clientes" : "fornecedores";
-    const fora: ReactNode[] = lista.map((p) => linhaPessoa(
-      `pe-${g.id}-${p.cd_pessoa}-${p.lado}`,
-      <>
-        <span className="mr-1 tabular-nums opacity-70">{p.cd_pessoa}</span>
-        <span className={cn(p.previsto && "font-semibold text-[var(--text)]")}>{p.nome}</span>
-        {p.previsto && (
-          <span className="ml-1.5 rounded bg-[#EEEEFD] px-1 text-[9px] font-bold uppercase text-[#0000C2] dark:bg-[#262f6b] dark:text-[#c7c9ff]">previsto</span>
-        )}
-        {g.id === "estrategicos" && p.lado === "receber" && (
-          <span className="ml-1.5 rounded bg-emerald-100 px-1 text-[9px] font-bold uppercase text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-200">crédito</span>
-        )}
-      </>,
-      p.valores, p.cd_pessoa,
-    ));
-    if (!pg || (pg.carregando && lista.length === 0)) {
-      fora.push(
-        <tr key={`c-${g.id}`} className="border-t border-[var(--border)]">
-          <td colSpan={meses.length * 3 + 1} className="py-2 pl-8 text-xs text-[var(--text-muted)]">
-            <Loader2 size={12} className="mr-1 inline animate-spin" />carregando {quem} do ERP…
-          </td>
-        </tr>
-      );
-      return fora;
-    }
-    const doTopo = lista.filter((p) => !p.previsto).length;
-    const faltam = pg.total - doTopo;
-    if (faltam > 0) {
-      // O restante do grupo, para as linhas fecharem com o total.
-      const resto = new Map<string, number>();
-      for (const m of meses) {
-        const total = sistema.get(`${g.id}|${m}`) ?? 0;
-        resto.set(m, Math.round((total - lista.reduce((acc, p) => acc + (p.valores.get(m) ?? 0), 0)) * 100) / 100);
-      }
-      fora.push(linhaPessoa(`r-${g.id}`,
-        <span className="inline-flex items-center gap-1.5 italic">
-          Demais {faltam.toLocaleString("pt-BR")} {quem}
-          <span className="rounded border border-[var(--border)] bg-[var(--surface)] px-1.5 text-[10px] font-semibold not-italic text-[var(--text)]">
-            {pg.carregando ? <Loader2 size={10} className="inline animate-spin" /> : `+ ${Math.min(POR_PAGINA, faltam)}`}
-          </span>
-        </span>,
-        resto, null,
-        () => { if (!pg.carregando) carregarGrupo(g.id, doTopo); }));
-    } else if (lista.length === 0) {
-      fora.push(
-        <tr key={`v-${g.id}`} className="border-t border-[var(--border)]">
-          <td colSpan={meses.length * 3 + 1} className="py-2 pl-8 text-xs text-[var(--text-muted)]">Nenhum título do ERP neste grupo e período.</td>
-        </tr>
-      );
-    }
-    return fora;
-  }
-
-  function celulas(chaveGrupo: (mes: string) => string[], negrito = false) {
-    return celulasValores(
-      (mes) => chaveGrupo(mes).reduce((acc, k) => acc + (previsto.get(k) ?? 0), 0),
-      (mes) => chaveGrupo(mes).reduce((acc, k) => acc + (sistema.get(k) ?? 0), 0),
-      negrito,
-    );
-  }
-
   // Um mês por vez: previsto, o que há no sistema e a diferença entre os dois.
-  function celulasValores(previstoDe: (mes: string) => number, sistemaDe: (mes: string) => number, negrito = false, miudo = false) {
+  function celulas(previstoDe: (mes: string) => number, sistemaDe: (mes: string) => number, negrito = false, miudo = false) {
     return meses.map((mes, i) => {
       const p = previstoDe(mes);
       const s = sistemaDe(mes);
@@ -328,20 +251,21 @@ export default function CruzamentoErp({ empresaId, lancamentos, premissas }: Pro
       const cobertura = p !== 0 && (s === 0 || Math.sign(s) === Math.sign(p)) ? Math.round((Math.abs(s) / Math.abs(p)) * 100) : null;
       const cel = cn("px-2 text-right tabular-nums whitespace-nowrap", miudo ? "py-1" : "py-1.5", negrito && "font-bold");
       const vazio = <span className="text-[var(--text-muted)]/40">–</span>;
+      const zebra = i % 2 === 1 && "bg-black/[0.015] dark:bg-white/[0.02]";
       return (
         <Fragment key={mes}>
-          <td className={cn(cel, "border-l-2 border-slate-200 text-[var(--text-muted)] dark:border-slate-700", i % 2 === 1 && "bg-black/[0.015] dark:bg-white/[0.02]")}>
+          <td className={cn(cel, "border-l-2 border-slate-200 text-[var(--text-muted)] dark:border-slate-700", zebra)}>
             {p ? formatGrade(p, milhares) : vazio}
           </td>
-          <td className={cn(cel, i % 2 === 1 && "bg-black/[0.015] dark:bg-white/[0.02]")}>{s ? formatGrade(s, milhares) : vazio}</td>
+          <td className={cn(cel, zebra)}>{s ? formatGrade(s, milhares) : vazio}</td>
           {futuro ? (
             <td title={cobertura != null ? `${formatReais(Math.abs(s))} já lançado de ${formatReais(Math.abs(p))} previsto` : undefined}
-              className={cn(cel, "pr-3 font-normal text-[var(--text-muted)]", i % 2 === 1 && "bg-black/[0.015] dark:bg-white/[0.02]")}>
+              className={cn(cel, "pr-3 font-normal text-[var(--text-muted)]", zebra)}>
               {cobertura != null ? `${cobertura}%` : vazio}
             </td>
           ) : (
             <td title={p ? `${dif >= 0 ? "+" : ""}${formatReais(dif)} (${(rel * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}% do previsto)` : undefined}
-              className={cn(cel, "pr-3", i % 2 === 1 && "bg-black/[0.015] dark:bg-white/[0.02]",
+              className={cn(cel, "pr-3", zebra,
                 !p && !s ? "" : aderente ? "text-[var(--text-muted)]" : dif > 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400")}>
               {!p && !s ? vazio : aderente ? "≈" : `${dif > 0 ? "+" : ""}${formatGrade(dif, milhares)}`}
             </td>
@@ -351,14 +275,159 @@ export default function CruzamentoErp({ empresaId, lancamentos, premissas }: Pro
     });
   }
 
-  if (empresaId !== 1) {
-    return <p className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-8 text-center text-sm text-[var(--text-muted)]">
-      O cruzamento com o ERP está disponível só para a renovadora (empresas 1000 a 1024) por enquanto.
-    </p>;
+  function linha(opts: {
+    chave: string; nome: ReactNode; nivel: number; previsto?: Map<string, number>; sistema?: Map<string, number>;
+    zebra?: boolean; forte?: boolean; onClick?: () => void; titulo?: string;
+  }) {
+    const bg = opts.zebra ? "bg-[#F1F2F6] dark:bg-neutral-800" : "bg-[var(--surface)]";
+    return (
+      <tr key={opts.chave} onClick={opts.onClick}
+        className={cn("group border-t border-[var(--border)] hover:bg-[#EDEDFA] dark:hover:bg-[#191934]",
+          opts.zebra && "bg-[#F1F2F6] dark:bg-neutral-800", opts.onClick && "cursor-pointer",
+          opts.nivel === 0 && "border-t-slate-300 dark:border-t-slate-600")}>
+        <td style={{ paddingLeft: recuo(opts.nivel) }} title={opts.titulo}
+          className={cn("sticky left-0 z-10 max-w-[24rem] truncate whitespace-nowrap py-1.5 pr-3 shadow-[2px_0_4px_rgba(0,0,0,0.05)]",
+            bg, "group-hover:bg-[#EDEDFA] dark:group-hover:bg-[#191934]",
+            opts.forte ? "font-semibold text-[var(--text)]" : "text-[var(--text-muted)]")}>
+          {opts.nome}
+        </td>
+        {celulas((m) => opts.previsto?.get(m) ?? 0, (m) => opts.sistema?.get(m) ?? 0, opts.nivel === 0, opts.nivel > 1)}
+      </tr>
+    );
   }
 
-  const entradas: GrupoId[] = ["recebimentos", "creditos"];
-  const saidas = GRUPOS.filter((g) => !entradas.includes(g.id)).map((g) => g.id);
+  const linhaTexto = (chave: string, conteudo: ReactNode, nivel: number, onClick?: () => void) => (
+    <tr key={chave} onClick={onClick} className={cn("border-t border-[var(--border)]", onClick && "group cursor-pointer hover:bg-[#EDEDFA] dark:hover:bg-[#191934]")}>
+      <td colSpan={meses.length * 3 + 1} style={{ paddingLeft: recuo(nivel) }}
+        className={cn("py-1.5 text-xs text-[var(--text-muted)]", onClick && "group-hover:text-[var(--primary)]")}>
+        {conteudo}
+      </td>
+    </tr>
+  );
+
+  // Blocos para escolher no vínculo: o caminho inteiro, para não confundir.
+  const caminho = (b: Bloco): string => {
+    const pai = b.pai_id ? blocos.find((x) => x.id === b.pai_id) : null;
+    return pai ? `${caminho(pai)} › ${b.nome}` : b.nome;
+  };
+  const opcoesBloco = blocos.map((b) => ({ id: b.id, rotulo: caminho(b) })).sort((a, b) => a.rotulo.localeCompare(b.rotulo));
+
+  const seletorBloco = (cd: number, atual?: string) => (
+    <select value={atual ?? ""} onClick={(e) => e.stopPropagation()}
+      onChange={(e) => { if (e.target.value) vincular(cd, e.target.value); }}
+      className="ml-2 max-w-56 rounded border border-[var(--border)] bg-[var(--surface)] px-1 py-0.5 text-[10px] text-[var(--text)]">
+      <option value="">vincular a…</option>
+      {opcoesBloco.map((o) => <option key={o.id} value={o.id}>{o.rotulo}</option>)}
+    </select>
+  );
+
+  // ---------- montagem das linhas ----------
+  function linhasDoBloco(b: Bloco, nivel: number): ReactNode[] {
+    const fora: ReactNode[] = [];
+    // Fornecedores ligados a este bloco (não aos filhos).
+    const daqui = [...pessoasLigadas.entries()].filter(([, bloco]) => bloco === b.id);
+    for (const [cd] of daqui) {
+      const p = pessoas.get(cd);
+      const prev = new Map<string, number>();
+      for (const mes of meses) {
+        const v = previstoPessoa.get(`${b.id}|${cd}|${mes}`);
+        if (v) prev.set(mes, v);
+      }
+      const explicito = vinculos.has(cd);
+      fora.push(linha({
+        chave: `pe-${b.id}-${cd}`, nivel: nivel + 1, previsto: prev, sistema: p?.valores,
+        nome: (
+          <span className="inline-flex items-center gap-1">
+            <span className="tabular-nums opacity-60">{cd}</span>
+            {p?.nome ?? `Pessoa ${cd}`}
+            {explicito && (
+              <button onClick={(e) => { e.stopPropagation(); desvincular(cd); }} title="Desfazer o vínculo"
+                className="rounded p-0.5 text-[var(--text-muted)] hover:text-red-600"><X size={11} /></button>
+            )}
+          </span>
+        ),
+      }));
+    }
+    // O que o bloco prevê sem apontar fornecedor nenhum.
+    const semFornecedor = new Map<string, number>();
+    for (const mes of meses) {
+      const total = previstoBloco.get(`${b.id}|${mes}`) ?? 0;
+      const comFornecedor = daqui.reduce((s, [cd]) => s + (previstoPessoa.get(`${b.id}|${cd}|${mes}`) ?? 0), 0);
+      const resto = Math.round((total - comFornecedor) * 100) / 100;
+      if (resto) semFornecedor.set(mes, resto);
+    }
+    if (semFornecedor.size) {
+      fora.push(linha({
+        chave: `sf-${b.id}`, nivel: nivel + 1, previsto: semFornecedor,
+        nome: <i>Previsto sem fornecedor apontado</i>,
+        titulo: "Linhas deste bloco que ainda não apontam um fornecedor do ERP",
+      }));
+    }
+    if (fora.length === 0 && filhosDe(b.id).length === 0) {
+      fora.push(linhaTexto(`v-${b.id}`, "Nada previsto nem vinculado neste bloco.", nivel + 1));
+    }
+    return fora;
+  }
+
+  function linhasDaArvore(b: Bloco, nivel: number, zebra?: boolean): ReactNode[] {
+    const fora: ReactNode[] = [];
+    const aberto = abertos.has(b.id);
+    const filhos = filhosDe(b.id);
+    fora.push(linha({
+      chave: `b-${b.id}`, nivel, zebra, forte: true, onClick: () => alternar(b.id),
+      previsto: somaDaArvore(b.id, previstoBloco), sistema: somaDaArvore(b.id, sistemaBloco),
+      nome: <span className="inline-flex items-center gap-1">{aberto ? <ChevronDown size={13} /> : <ChevronRight size={13} />}{b.nome}</span>,
+    }));
+    if (!aberto) return fora;
+    fora.push(...linhasDoBloco(b, nivel));
+    for (const f of filhos) fora.push(...linhasDaArvore(f, nivel + 1));
+    return fora;
+  }
+
+  const linhas: ReactNode[] = [];
+  filhosDe(null).forEach((b, i) => linhas.push(...linhasDaArvore(b, 0, i % 2 === 1)));
+
+  // Seção do que o ERP tem e ninguém reclamou.
+  const abertoSoltas = abertos.has(SEM_VINCULO);
+  linhas.push(linha({
+    chave: "b-sem", nivel: 0, forte: true, sistema: semVinculo, onClick: () => alternar(SEM_VINCULO),
+    nome: (
+      <span className="inline-flex items-center gap-1">
+        {abertoSoltas ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+        Sem vínculo no ERP
+        <span className="font-normal text-[10px] text-[var(--text-muted)]">· títulos de quem ainda não aponta um bloco</span>
+      </span>
+    ),
+  }));
+  if (abertoSoltas) {
+    for (const s of soltas.linhas) {
+      linhas.push(linha({
+        chave: `s-${s.cd_pessoa}`, nivel: 1, sistema: s.valores,
+        nome: (
+          <span className="inline-flex items-center gap-1">
+            <span className="tabular-nums opacity-60">{s.cd_pessoa}</span>
+            {s.nome}
+            {seletorBloco(s.cd_pessoa)}
+          </span>
+        ),
+      }));
+    }
+    if (soltas.carregando && soltas.linhas.length === 0) {
+      linhas.push(linhaTexto("s-carregando", <><Loader2 size={12} className="mr-1 inline animate-spin" />carregando fornecedores…</>, 1));
+    } else if (soltas.total > soltas.linhas.length) {
+      linhas.push(linhaTexto("s-mais",
+        <span className="inline-flex items-center gap-1.5">
+          Mais {(soltas.total - soltas.linhas.length).toLocaleString("pt-BR")} sem vínculo
+          <span className="rounded border border-[var(--border)] bg-[var(--surface)] px-1.5 text-[10px] font-semibold text-[var(--text)]">
+            {soltas.carregando ? <Loader2 size={10} className="inline animate-spin" /> : `+ ${POR_PAGINA}`}
+          </span>
+        </span>, 1, () => { if (!soltas.carregando) carregarSoltas(soltas.linhas.length); }));
+    } else if (soltas.total === 0 && !soltas.carregando) {
+      linhaTexto("s-vazio", "Todo o movimento do ERP está vinculado a um bloco.", 1);
+    }
+  }
+
+  const totalPrevisto = somaMapas(filhosDe(null).map((b) => somaDaArvore(b.id, previstoBloco)));
   const sel = "rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5 text-sm text-[var(--text)]";
 
   return (
@@ -373,6 +442,11 @@ export default function CruzamentoErp({ empresaId, lancamentos, premissas }: Pro
           {opcoes.map((m) => <option key={m} value={m}>{rotuloMes(m)}</option>)}
         </select>
         <span className="text-xs text-[var(--text-muted)]">
+          {vinculos.size + pessoasLigadas.size > 0
+            ? `${pessoasLigadas.size} fornecedor(es) vinculado(s)`
+            : "nenhum fornecedor vinculado ainda"}
+        </span>
+        <span className="text-xs text-[var(--text-muted)]">
           {sincronizado ? `ERP sincronizado em ${new Date(sincronizado).toLocaleString("pt-BR")}` : "ERP ainda não sincronizado"}
         </span>
         <button onClick={() => setMilhares((v) => !v)}
@@ -380,15 +454,6 @@ export default function CruzamentoErp({ empresaId, lancamentos, premissas }: Pro
             milhares ? "border-[var(--primary)] bg-[var(--primary)] text-white" : "border-[var(--border)] bg-[var(--surface)] text-[var(--text-muted)] hover:text-[var(--text)]")}>
           R$ mil {milhares ? "•" : ""}
         </button>
-      </div>
-
-      <div className="flex flex-wrap gap-2 text-xs">
-        <span className="rounded-md bg-amber-50 px-2 py-1 text-amber-800 dark:bg-amber-900/30 dark:text-amber-200">
-          Vencidos e não recebidos (meses anteriores): <b className="tabular-nums">R$ {formatReais(vencidos.receber)}</b>
-        </span>
-        <span className="rounded-md bg-amber-50 px-2 py-1 text-amber-800 dark:bg-amber-900/30 dark:text-amber-200">
-          Vencidos e não pagos (meses anteriores): <b className="tabular-nums">R$ {formatReais(Math.abs(vencidos.pagar))}</b>
-        </span>
       </div>
 
       {erro && <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{erro}</div>}
@@ -401,7 +466,7 @@ export default function CruzamentoErp({ empresaId, lancamentos, premissas }: Pro
             <thead>
               <tr className="text-white">
                 <th rowSpan={2} style={{ backgroundColor: AZUL }} className="sticky left-0 top-0 z-30 min-w-64 px-3 py-2 text-left font-semibold">
-                  Grupo {milhares && <span className="font-normal opacity-75">· R$ mil</span>}
+                  Bloco / fornecedor {milhares && <span className="font-normal opacity-75">· R$ mil</span>}
                 </th>
                 {meses.map((m, i) => (
                   <th key={m} colSpan={3} style={{ backgroundColor: i % 2 === 1 ? AZUL_ALT : AZUL }}
@@ -421,35 +486,13 @@ export default function CruzamentoErp({ empresaId, lancamentos, premissas }: Pro
               </tr>
             </thead>
             <tbody>
-              {GRUPOS.map((g, i) => (
-                <Fragment key={g.id}>
-                  <tr onClick={() => alternar(g.id)}
-                    className={cn("group cursor-pointer border-t border-[var(--border)] hover:bg-[#EDEDFA] dark:hover:bg-[#191934]", i % 2 === 1 && "bg-[#F1F2F6] dark:bg-neutral-800")}>
-                    <td className={cn("sticky left-0 z-10 px-3 py-1.5 shadow-[2px_0_4px_rgba(0,0,0,0.05)] group-hover:bg-[#EDEDFA] dark:group-hover:bg-[#191934]",
-                      i % 2 === 1 ? "bg-[#F1F2F6] dark:bg-neutral-800" : "bg-[var(--surface)]")} title={`No ERP: ${g.erp}`}>
-                      <div className="flex items-start gap-1">
-                        {abertos.has(g.id) ? <ChevronDown size={13} className="mt-0.5 shrink-0" /> : <ChevronRight size={13} className="mt-0.5 shrink-0" />}
-                        <div>
-                          <div className="font-semibold text-[var(--text)]">{g.rotulo}</div>
-                          <div className="text-[10px] text-[var(--text-muted)]">{g.erp}</div>
-                        </div>
-                      </div>
-                    </td>
-                    {celulas((mes) => [`${g.id}|${mes}`])}
-                  </tr>
-                  {abertos.has(g.id) && linhasDoGrupo(g)}
-                </Fragment>
-              ))}
-              {[
-                { id: "entradas", rotulo: "Entradas", grupos: entradas },
-                { id: "saidas", rotulo: "Saídas", grupos: saidas },
-                { id: "liquido", rotulo: "Líquido do mês", grupos: GRUPOS.map((g) => g.id) },
-              ].map((t, i) => (
-                <tr key={t.id} className={cn("border-t border-slate-300 dark:border-slate-600", i === 0 && "border-t-2")}>
-                  <td className="sticky left-0 z-10 bg-[var(--surface)] px-3 py-2 font-extrabold uppercase tracking-wide text-[var(--text)] shadow-[2px_0_4px_rgba(0,0,0,0.05)]">{t.rotulo}</td>
-                  {celulas((mes) => t.grupos.map((g) => `${g}|${mes}`), true)}
-                </tr>
-              ))}
+              {linhas.map((l, i) => <Fragment key={i}>{l}</Fragment>)}
+              <tr className="border-t-2 border-slate-300 font-extrabold dark:border-slate-600">
+                <td className="sticky left-0 z-10 bg-[var(--surface)] px-3 py-2 uppercase tracking-wide text-[var(--text)] shadow-[2px_0_4px_rgba(0,0,0,0.05)]">
+                  Total do mês
+                </td>
+                {celulas((m) => totalPrevisto.get(m) ?? 0, (m) => totalErp.get(m) ?? 0, true)}
+              </tr>
             </tbody>
           </table>
         </div>
@@ -457,14 +500,15 @@ export default function CruzamentoErp({ empresaId, lancamentos, premissas }: Pro
 
       <div className="space-y-1 text-xs text-[var(--text-muted)]">
         <p>
-          <b>Previsto</b> vem do controle manual (lançamentos ativos e premissas). <b>Sistema</b>: nos meses passados, o que foi pago e recebido no ERP
-          (títulos liquidados, pelo valor do documento); no mês atual, o realizado mais o que ainda vence no mês; nos meses futuros, o que já está lançado no ERP.
+          As linhas são os mesmos blocos do Fluxo próprio. <b>Previsto</b> vem do controle manual (lançamentos ativos e premissas).
+          <b> Sistema</b> é o movimento no ERP dos fornecedores vinculados àquele bloco — pelo fornecedor apontado na linha do lançamento
+          ou pelo vínculo feito aqui. Abra um bloco para ver fornecedor a fornecedor.
         </p>
         <p>
-          <b>Dif.</b> (meses passados e atual) = sistema − previsto: verde é melhor para o caixa (recebeu mais ou pagou menos), vermelho é pior; <b>≈</b> indica diferença de até ±5% do previsto.
-          <b>% no ERP</b> (meses futuros) = quanto da previsão já está lançado em títulos — o resto ainda é estimativa.
-          Clique num grupo para abrir os clientes e fornecedores que formam a coluna do sistema, dos maiores para os menores.
-          Ficam fora do ERP: títulos reparcelados (status A), incobráveis, adiantamentos e provisões. Só empresas 1000 a 1024.
+          <b>Sem vínculo no ERP</b> reúne quem ainda não aponta bloco nenhum; escolha o bloco na caixinha ao lado do nome e ele passa a
+          contar na linha certa. O <b>total do mês</b> compara o previsto inteiro com todo o ERP, vinculado ou não.
+          Nos meses passados o sistema é o que foi pago e recebido; no mês atual, o realizado mais o que ainda vence; nos futuros, o que já está lançado.
+          Ficam fora: títulos reparcelados (status A), incobráveis, adiantamentos e provisões. Só empresas 1000 a 1024.
         </p>
       </div>
     </div>
