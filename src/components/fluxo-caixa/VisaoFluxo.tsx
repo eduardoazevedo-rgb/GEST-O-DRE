@@ -38,8 +38,8 @@ const somaMapas = (ms: (Map<string, number> | undefined)[]) => {
   for (const m of ms) m?.forEach((v, k) => out.set(k, (out.get(k) ?? 0) + v));
   return out;
 };
-// nível 0 bloco · 1 unidade/sub-bloco · 2 lançamento · 3 fornecedor (mais um nível dentro dos sub-blocos)
-const RECUO = [12, 36, 60, 84, 108] as const;
+// nível 0 é o bloco; cada sub-bloco, unidade, lançamento e fornecedor desce um.
+const recuo = (nivel: number) => 12 + nivel * 24;
 const somar = (mapa: Map<string, number>, mes: string, v: number) => mapa.set(mes, (mapa.get(mes) ?? 0) + v);
 
 export default function VisaoFluxo({
@@ -214,7 +214,7 @@ export default function VisaoFluxo({
           opts.subtitulo && "font-semibold")}>
         <td className={cn("sticky left-0 z-10 max-w-[22rem] truncate whitespace-nowrap py-1.5 pr-3 shadow-[2px_0_4px_rgba(0,0,0,0.05)]", bg, HOVER_FIXA,
           opts.nivel !== 0 && !opts.subtitulo && "font-normal text-[var(--text-muted)]")}
-          style={{ paddingLeft: RECUO[opts.nivel] }} title={opts.titulo}>
+          style={{ paddingLeft: recuo(opts.nivel) }} title={opts.titulo}>
           {opts.nome}
         </td>
         {meses.map((m) => <td key={m} className={cel}>{numero(opts.valores?.get(m))}</td>)}
@@ -235,6 +235,8 @@ export default function VisaoFluxo({
     );
   }
 
+  const filhosDe = (id: string) => blocos.filter((b) => b.pai_id === id);
+
   // Fornecedor do lançamento: mostra e deixa escolher na lista do ERP.
   function linhaFornecedor(l: Lancamento, nivel: number) {
     const nome = l.cd_pessoa != null ? (nomesPessoas.get(l.cd_pessoa) ?? `Pessoa ${l.cd_pessoa}`) : null;
@@ -242,7 +244,7 @@ export default function VisaoFluxo({
     if (fornecedorDe === l.id && onFornecedor) {
       return (
         <tr key={`f-${l.id}`} className="border-t border-[var(--border)] bg-[#EEEEFD] dark:bg-[#1b1b3a]">
-          <td colSpan={meses.length + 2} className="py-1 pr-3" style={{ paddingLeft: RECUO[nivel] }}>
+          <td colSpan={meses.length + 2} className="py-1 pr-3" style={{ paddingLeft: recuo(nivel) }}>
             <div className="flex items-center gap-2">
               <div className="w-72">
                 <SeletorPessoa valor={l.cd_pessoa ?? null} nomeInicial={nome} className="py-1 text-xs"
@@ -260,7 +262,7 @@ export default function VisaoFluxo({
       nome
         ? <span className="inline-flex items-center gap-1"><span className="tabular-nums opacity-60">{l.cd_pessoa}</span>{nome}</span>
         : <span className="inline-flex items-center gap-1 opacity-70"><Plus size={11} /> sem fornecedor</span>,
-      RECUO[nivel], onFornecedor ? () => setFornecedorDe(l.id) : undefined);
+      recuo(nivel), onFornecedor ? () => setFornecedorDe(l.id) : undefined);
   }
 
   // O fornecedor fica escondido até abrir a seta do lançamento — sem ele, a
@@ -294,14 +296,14 @@ export default function VisaoFluxo({
   function linhaCriar(b: Bloco, unidade: number | null, nivel: number) {
     const fora: ReactNode[] = [];
     if (!onCriar) return fora;
-    const recuo = RECUO[nivel];
+    const px = recuo(nivel);
     const chave = `${b.id}|${unidade ?? ""}`;
     if (novo && `${novo.bloco}|${novo.unidade ?? ""}` === chave) {
-      fora.push(linhaNova(b, recuo));
-      if (erroNovo) fora.push(linhaTexto(`e-${chave}`, <span className="text-red-600 dark:text-red-400">{erroNovo}</span>, recuo));
+      fora.push(linhaNova(b, px));
+      if (erroNovo) fora.push(linhaTexto(`e-${chave}`, <span className="text-red-600 dark:text-red-400">{erroNovo}</span>, px));
     } else {
       fora.push(linhaTexto(`+${chave}`, <span className="inline-flex items-center gap-1"><Plus size={12} /> nova linha</span>,
-        recuo, () => abrirNovo(b.id, unidade)));
+        px, () => abrirNovo(b.id, unidade)));
     }
     return fora;
   }
@@ -352,8 +354,8 @@ export default function VisaoFluxo({
     }
 
     for (const { l } of itens) fora.push(...linhasDoItem(l, nivel));
-    if (!premissa && itens.length === 0 && novo?.bloco !== b.id) {
-      fora.push(linhaTexto(`v-${b.id}`, "Nenhum lançamento neste período.", RECUO[nivel]));
+    if (!premissa && itens.length === 0 && novo?.bloco !== b.id && filhosDe(b.id).length === 0) {
+      fora.push(linhaTexto(`v-${b.id}`, "Nenhum lançamento neste período.", recuo(nivel)));
     }
     fora.push(...linhaCriar(b, null, nivel));
     return fora;
@@ -362,30 +364,30 @@ export default function VisaoFluxo({
   const alternar = (id: string) =>
     setAbertos((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
-  const linhas: ReactNode[] = [];
-  blocos.filter((b) => !b.pai_id).forEach((b, i) => {
-    const filhos = blocos.filter((f) => f.pai_id === b.id);
-    const aberto = abertos.has(b.id);
-    // O bloco pai mostra também o que está nos sub-blocos.
-    const valores = filhos.length
-      ? somaMapas([calc.porBloco.get(b.id), ...filhos.map((f) => calc.porBloco.get(f.id))])
-      : calc.porBloco.get(b.id);
-    linhas.push(linhaFluxo({
-      chave: `b-${b.id}`, nivel: 0, zebra: i % 2 === 1, valores, onClick: () => alternar(b.id),
-      nome: <span className="inline-flex items-center gap-1">{aberto ? <ChevronDown size={13} /> : <ChevronRight size={13} />}{b.nome}</span>,
-    }));
-    if (!aberto) return;
+  // Um bloco mostra o que é dele e o que está nos sub-blocos, em qualquer profundidade.
+  function valoresComFilhos(b: Bloco): Map<string, number> {
+    return somaMapas([calc.porBloco.get(b.id), ...filhosDe(b.id).map(valoresComFilhos)]);
+  }
 
-    linhas.push(...linhasDoBloco(b, 1));
-    for (const filho of filhos) {
-      const abertoFilho = abertos.has(filho.id);
-      linhas.push(linhaFluxo({
-        chave: `b-${filho.id}`, nivel: 1, subtitulo: true, valores: calc.porBloco.get(filho.id), onClick: () => alternar(filho.id),
-        nome: <span className="inline-flex items-center gap-1">{abertoFilho ? <ChevronDown size={12} /> : <ChevronRight size={12} />}{filho.nome}</span>,
-      }));
-      if (abertoFilho) linhas.push(...linhasDoBloco(filho, 2));
-    }
-  });
+  function linhasDaArvore(b: Bloco, nivel: number, zebra?: boolean) {
+    const fora: ReactNode[] = [];
+    const filhos = filhosDe(b.id);
+    const aberto = abertos.has(b.id);
+    const seta = nivel === 0 ? 13 : 12;
+    fora.push(linhaFluxo({
+      chave: `b-${b.id}`, nivel, zebra, subtitulo: nivel > 0,
+      valores: filhos.length ? valoresComFilhos(b) : calc.porBloco.get(b.id),
+      onClick: () => alternar(b.id),
+      nome: <span className="inline-flex items-center gap-1">{aberto ? <ChevronDown size={seta} /> : <ChevronRight size={seta} />}{b.nome}</span>,
+    }));
+    if (!aberto) return fora;
+    fora.push(...linhasDoBloco(b, nivel + 1));
+    for (const filho of filhos) fora.push(...linhasDaArvore(filho, nivel + 1));
+    return fora;
+  }
+
+  const linhas: ReactNode[] = [];
+  blocos.filter((b) => !b.pai_id).forEach((b, i) => { linhas.push(...linhasDaArvore(b, 0, i % 2 === 1)); });
 
   const s = calc.saldo;
   const fechado = (m: string) => calc.reais.has(m);

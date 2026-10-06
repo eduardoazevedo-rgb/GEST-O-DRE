@@ -17,7 +17,7 @@ const GRUPOS = [
   { id: "estrategicos", rotulo: "Fornecedores matérias-primas", blocos: ["estrategicos"], erp: "O que se paga aos fornecedores com código no campo \"Códigos no ERP\"" },
   { id: "creditos", rotulo: "Créditos de fornecedores", blocos: ["creditos_fornecedores"], erp: "Créditos concedidos por esses fornecedores (a receber, tipos 24 e 103)" },
   { id: "financiamentos", rotulo: "Financiamentos", blocos: ["financiamentos"], erp: "Empréstimos (tipos 18, 19) e consórcios (41 a 43)" },
-  { id: "investimentos", rotulo: "Investimentos, veículos e SSMA", blocos: ["investimentos", "veiculos", "ssma"], erp: "Contas a pagar – imobilizado (tipo 34)" },
+  { id: "investimentos", rotulo: "Investimentos, veículos e SSMA", blocos: ["investimentos", "benfeitoria", "contratos", "veiculos", "ssma"], erp: "Contas a pagar – imobilizado (tipo 34)" },
 ] as const;
 type GrupoId = (typeof GRUPOS)[number]["id"];
 const GRUPO_DO_BLOCO = new Map<string, GrupoId>(GRUPOS.flatMap((g) => g.blocos.map((b) => [b, g.id] as const)));
