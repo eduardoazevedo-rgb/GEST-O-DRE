@@ -17,7 +17,6 @@ const AZUL_ALT = "#1A1AD1";
 const TOLERANCIA = 0.05; // ±5%: dentro disso a previsão é considerada aderente
 const POR_PAGINA = 50;
 const SEM_VINCULO = "__sem_vinculo__";
-const REGRAS = "__regras__";
 
 // Grupos em que o ERP se divide (regra em fc_erp_base).
 const GRUPOS_ERP: { id: string; rotulo: string }[] = [
@@ -67,8 +66,8 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
   const [sincronizado, setSincronizado] = useState<string | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState("");
-  // A seção das regras já começa aberta: é o atalho para ligar grupo inteiro.
-  const [abertos, setAbertos] = useState<Set<string>>(new Set([REGRAS]));
+  const [abertos, setAbertos] = useState<Set<string>>(new Set());
+  const [painelRegras, setPainelRegras] = useState(false);
   const [versao, setVersao] = useState(0); // sobe a cada vínculo criado ou desfeito
 
   const meses = useMemo(() => (de <= ate ? listarMeses(de, ate) : []), [de, ate]);
@@ -532,29 +531,6 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
     }
   }
 
-  // Regras por grupo do ERP, para ajustar sem sair da tela.
-  const abertoRegras = abertos.has(REGRAS);
-  linhas.push(linhaTexto("b-regras",
-    <span className="inline-flex items-center gap-1 font-semibold text-[var(--text)]">
-      {abertoRegras ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-      Grupos do ERP ligados direto a um bloco
-      <span className="font-normal text-[10px] text-[var(--text-muted)]">· entram fechados, sem abrir por cliente</span>
-    </span>, 0, () => alternar(REGRAS)));
-  if (abertoRegras) {
-    for (const g of GRUPOS_ERP) {
-      const bloco = regras.get(g.id);
-      linhas.push(linhaTexto(`rg-${g.id}`,
-        <span className="inline-flex flex-wrap items-center gap-1">
-          {g.rotulo}
-          <select value={bloco ?? ""} onChange={(e) => regraGrupo(g.id, e.target.value)}
-            className="ml-2 max-w-64 rounded border border-[var(--border)] bg-[var(--surface)] px-1 py-0.5 text-[10px] text-[var(--text)]">
-            <option value="">fornecedor a fornecedor</option>
-            {opcoesBloco.map((o) => <option key={o.id} value={o.id}>{o.rotulo}</option>)}
-          </select>
-        </span>, 1));
-    }
-  }
-
   const totalPrevisto = somaMapas(filhosDe(null).map((b) => somaDaArvore(b.id, previstoBloco)));
   const sel = "rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5 text-sm text-[var(--text)]";
 
@@ -625,6 +601,32 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
           </table>
         </div>
       )}
+
+      {/* Configuração, não número: fica fora da grade para não poluir a leitura. */}
+      <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)]">
+        <button onClick={() => setPainelRegras((v) => !v)}
+          className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-xs font-semibold text-[var(--text)]">
+          {painelRegras ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          Grupos do ERP ligados direto a um bloco
+          <span className="font-normal text-[var(--text-muted)]">
+            · {regras.size} de {GRUPOS_ERP.length} ligados; os demais são vinculados fornecedor a fornecedor
+          </span>
+        </button>
+        {painelRegras && (
+          <div className="grid gap-2 border-t border-[var(--border)] px-4 py-3 sm:grid-cols-2">
+            {GRUPOS_ERP.map((g) => (
+              <label key={g.id} className="flex items-center justify-between gap-2 text-xs text-[var(--text-muted)]">
+                <span className="truncate" title={g.rotulo}>{g.rotulo}</span>
+                <select value={regras.get(g.id) ?? ""} onChange={(e) => regraGrupo(g.id, e.target.value)}
+                  className="w-48 shrink-0 rounded border border-[var(--border)] bg-[var(--surface)] px-1.5 py-1 text-[11px] text-[var(--text)]">
+                  <option value="">fornecedor a fornecedor</option>
+                  {opcoesBloco.map((o) => <option key={o.id} value={o.id}>{o.rotulo}</option>)}
+                </select>
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
 
       <div className="space-y-1 text-xs text-[var(--text-muted)]">
         <p>
