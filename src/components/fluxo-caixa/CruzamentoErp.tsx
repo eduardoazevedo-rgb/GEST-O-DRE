@@ -68,7 +68,9 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
   const [erro, setErro] = useState("");
   const [abertos, setAbertos] = useState<Set<string>>(new Set());
   const [painelRegras, setPainelRegras] = useState(false);
-  const [mostrarDif, setMostrarDif] = useState(true); // desligado, cabem mais meses na tela
+  // Modo de visão: os três números ou um só, e aí cada mês ocupa uma coluna.
+  const [modo, setModo] = useState<"tres" | "previsto" | "sistema" | "dif">("tres");
+  const [soFora, setSoFora] = useState(false); // esconde o que está dentro da tolerância
   const [versao, setVersao] = useState(0); // sobe a cada vínculo criado ou desfeito
 
   const meses = useMemo(() => (de <= ate ? listarMeses(de, ate) : []), [de, ate]);
@@ -321,46 +323,95 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
   }
 
   const rotuloSistema = (mes: string) => (mes < hoje ? "Realizado" : mes > hoje ? "No ERP" : "Real.+aberto");
+  const MODOS = [
+    { id: "tres", rotulo: "Os três" },
+    { id: "previsto", rotulo: "Previsto" },
+    { id: "sistema", rotulo: "Realizado" },
+    { id: "dif", rotulo: "Diferença" },
+  ] as const;
+  const colsPorMes = modo === "tres" ? 3 : 1;
+  const LARG_TOTAL = 104; // px de cada coluna de total, para grudar à direita
 
-  // Um mês por vez: previsto, o que há no sistema e a diferença entre os dois.
-  function celulas(previstoDe: (mes: string) => number, sistemaDe: (mes: string) => number, negrito = false, miudo = false) {
-    return meses.map((mes, i) => {
-      const p = previstoDe(mes);
-      const s = sistemaDe(mes);
-      const dif = s - p;
-      const rel = p !== 0 ? Math.abs(dif) / Math.abs(p) : dif === 0 ? 0 : 1;
-      const aderente = rel <= TOLERANCIA;
-      // Mês futuro: as notas ainda não chegaram, então a diferença não é erro —
-      // mostra quanto da previsão já está lançado no ERP.
-      const futuro = mes > hoje;
-      // Com sinais opostos (ex.: previsto de entrada, ERP com saída) a razão não significa nada.
-      const cobertura = p !== 0 && (s === 0 || Math.sign(s) === Math.sign(p)) ? Math.round((Math.abs(s) / Math.abs(p)) * 100) : null;
-      const cel = cn("px-2.5 text-right tabular-nums whitespace-nowrap", miudo ? "py-1" : "py-1.5", negrito && "font-bold");
-      const vazio = <span className="text-[var(--text-muted)]/40">–</span>;
-      // Faixa alternada por mês e um tom a mais no mês corrente, para o olho
-      // não se perder entre tantas colunas.
-      const zebra = mes === hoje ? "bg-[#EEEEFD]/70 dark:bg-[#262f6b]/40" : i % 2 === 1 && "bg-black/[0.015] dark:bg-white/[0.02]";
-      return (
-        <Fragment key={mes}>
-          <td className={cn(cel, "border-l-2 border-slate-300 text-[var(--text-muted)] dark:border-slate-600", zebra)}>
-            {p ? formatGrade(p, milhares) : vazio}
-          </td>
-          <td className={cn(cel, !mostrarDif && "pr-3 font-medium text-[var(--text)]", zebra)}>{s ? formatGrade(s, milhares) : vazio}</td>
-          {!mostrarDif ? null : futuro ? (
-            <td title={cobertura != null ? `${formatReais(Math.abs(s))} já lançado de ${formatReais(Math.abs(p))} previsto` : undefined}
-              className={cn(cel, "pr-3 font-normal text-[var(--text-muted)]", zebra)}>
-              {cobertura != null ? `${cobertura}%` : vazio}
-            </td>
-          ) : (
-            <td title={p ? `${dif >= 0 ? "+" : ""}${formatReais(dif)} (${(rel * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}% do previsto)` : undefined}
-              className={cn(cel, "pr-3", zebra,
-                !p && !s ? "" : aderente ? "text-[var(--text-muted)]" : dif > 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400")}>
-              {!p && !s ? vazio : aderente ? "≈" : `${dif > 0 ? "+" : ""}${formatGrade(dif, milhares)}`}
-            </td>
-          )}
-        </Fragment>
-      );
+  // Fundo da diferença: quanto mais longe da previsão, mais forte a cor.
+  function calor(dif: number, rel: number) {
+    if (rel <= TOLERANCIA) return "";
+    const faixa = rel <= 0.2 ? 0 : rel <= 0.5 ? 1 : 2;
+    const verde = ["bg-emerald-500/10", "bg-emerald-500/20", "bg-emerald-500/30"];
+    const vermelho = ["bg-red-500/10", "bg-red-500/20", "bg-red-500/30"];
+    return (dif > 0 ? verde : vermelho)[faixa];
+  }
+
+  // Está fora da tolerância? Mês futuro não conta: a nota ainda nem chegou.
+  function foraDaRegua(previsto?: Map<string, number>, sistema?: Map<string, number>) {
+    return meses.some((mes) => {
+      if (mes > hoje) return false;
+      const p = previsto?.get(mes) ?? 0;
+      const s = sistema?.get(mes) ?? 0;
+      if (!p && !s) return false;
+      if (!p) return true;
+      return Math.abs(s - p) / Math.abs(p) > TOLERANCIA;
     });
+  }
+
+  // Um mês (ou a coluna de total): previsto, realizado e diferença, ou só o escolhido.
+  function colunas(p: number, s: number, o: { mes?: string; i?: number; negrito?: boolean; miudo?: boolean; total?: boolean; rodape?: boolean; bg?: string }) {
+    const dif = s - p;
+    const rel = p !== 0 ? Math.abs(dif) / Math.abs(p) : dif === 0 ? 0 : 1;
+    const aderente = rel <= TOLERANCIA;
+    // Mês futuro: as notas ainda não chegaram, então a diferença não é erro —
+    // mostra quanto da previsão já está lançado no ERP.
+    const futuro = o.mes ? o.mes > hoje : false;
+    // Com sinais opostos (ex.: previsto de entrada, ERP com saída) a razão não significa nada.
+    const cobertura = p !== 0 && (s === 0 || Math.sign(s) === Math.sign(p)) ? Math.round((Math.abs(s) / Math.abs(p)) * 100) : null;
+    const base = cn("px-2.5 text-right tabular-nums whitespace-nowrap", o.miudo ? "py-1" : "py-1.5", o.negrito && "font-bold");
+    const vazio = <span className="text-[var(--text-muted)]/40">–</span>;
+    // Total e rodapé ficam grudados (direita/baixo), então precisam de fundo opaco.
+    const grudado = o.total || o.rodape;
+    const fundoPadrao = grudado
+      ? (o.bg ?? "bg-[var(--surface)]")
+      : cn(o.mes === hoje ? "bg-[#EEEEFD]/70 dark:bg-[#262f6b]/40" : (o.i ?? 0) % 2 === 1 && "bg-black/[0.015] dark:bg-white/[0.02]");
+    const camada = o.total && o.rodape ? "z-30" : grudado ? "z-10" : "";
+    const estilo = (ordem: number) =>
+      o.total ? { right: (colsPorMes - 1 - ordem) * LARG_TOTAL, width: LARG_TOTAL, minWidth: LARG_TOTAL } : undefined;
+
+    const montar = (chave: string, conteudo: ReactNode, extra: string, ordem: number, titulo?: string, fundo?: string) => (
+      <td key={chave} title={titulo} style={estilo(ordem)}
+        className={cn(base, fundo ?? fundoPadrao, extra,
+          ordem === 0 && "border-l-2 border-slate-300 dark:border-slate-600",
+          grudado && cn("sticky", camada),
+          o.rodape && "bottom-0 border-t-2 border-slate-300 dark:border-slate-600")}>
+        {conteudo}
+      </td>
+    );
+
+    const celPrevisto = (ordem: number) =>
+      montar("p", p ? formatGrade(p, milhares) : vazio, "text-[var(--text-muted)]", ordem);
+    const celSistema = (ordem: number) =>
+      montar("s", s ? formatGrade(s, milhares) : vazio, modo !== "tres" ? "font-medium text-[var(--text)]" : "", ordem);
+    const celDif = (ordem: number) => futuro
+      ? montar("d", cobertura != null ? cobertura + "%" : vazio, "font-normal text-[var(--text-muted)]", ordem,
+          cobertura != null ? formatReais(Math.abs(s)) + " já lançado de " + formatReais(Math.abs(p)) + " previsto" : undefined)
+      : montar("d", !p && !s ? vazio : aderente ? "≈" : (dif > 0 ? "+" : "") + formatGrade(dif, milhares),
+          cn(!p && !s ? "" : aderente ? "text-[var(--text-muted)]"
+            : dif > 0 ? "text-emerald-700 dark:text-emerald-300" : "text-red-700 dark:text-red-300"),
+          ordem,
+          p ? (dif >= 0 ? "+" : "") + formatReais(dif) + " (" + (rel * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 }) + "% do previsto)" : undefined,
+          !o.total && !aderente && (p || s) ? calor(dif, rel) : undefined);
+
+    const lista = modo === "tres" ? [celPrevisto(0), celSistema(1), celDif(2)]
+      : modo === "previsto" ? [celPrevisto(0)]
+      : modo === "sistema" ? [celSistema(0)]
+      : [celDif(0)];
+    return <Fragment key={o.mes ?? "total"}>{lista}</Fragment>;
+  }
+
+  function celulas(previstoDe: (mes: string) => number, sistemaDe: (mes: string) => number, negrito = false, miudo = false, bg?: string) {
+    const fora = meses.map((mes, i) => colunas(previstoDe(mes), sistemaDe(mes), { mes, i, negrito, miudo }));
+    fora.push(colunas(
+      meses.reduce((a, m) => a + previstoDe(m), 0),
+      meses.reduce((a, m) => a + sistemaDe(m), 0),
+      { negrito: true, miudo, total: true, bg }));
+    return fora;
   }
 
   function linha(opts: {
@@ -374,19 +425,21 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
           opts.zebra && "bg-[#F1F2F6] dark:bg-neutral-800", opts.onClick && "cursor-pointer",
           opts.nivel === 0 && "border-t-slate-300 dark:border-t-slate-600")}>
         <td style={{ paddingLeft: recuo(opts.nivel) }} title={opts.titulo}
-          className={cn("sticky left-0 z-10 w-[30rem] min-w-[30rem] max-w-[30rem] truncate whitespace-nowrap py-1.5 pr-3 shadow-[2px_0_4px_rgba(0,0,0,0.05)]",
+          className={cn("sticky left-0 z-20 w-[30rem] min-w-[30rem] max-w-[30rem] truncate whitespace-nowrap py-1.5 pr-3 shadow-[2px_0_4px_rgba(0,0,0,0.05)]",
             bg, "group-hover:bg-[#EDEDFA] dark:group-hover:bg-[#191934]",
             opts.forte ? "font-semibold text-[var(--text)]" : "text-[var(--text-muted)]")}>
           {opts.nome}
         </td>
-        {celulas((m) => opts.previsto?.get(m) ?? 0, (m) => opts.sistema?.get(m) ?? 0, opts.nivel === 0, opts.nivel > 1)}
+        {celulas((m) => opts.previsto?.get(m) ?? 0, (m) => opts.sistema?.get(m) ?? 0, opts.nivel === 0, opts.nivel > 1, bg)}
       </tr>
     );
   }
 
+  const colunasTotais = meses.length * colsPorMes + colsPorMes + 1;
+
   const linhaTexto = (chave: string, conteudo: ReactNode, nivel: number, onClick?: () => void) => (
     <tr key={chave} onClick={onClick} className={cn("h-[26px] border-t border-[var(--border)]", onClick && "group cursor-pointer hover:bg-[#EDEDFA] dark:hover:bg-[#191934]")}>
-      <td colSpan={meses.length * (mostrarDif ? 3 : 2) + 1} style={{ paddingLeft: recuo(nivel) }}
+      <td colSpan={colunasTotais} style={{ paddingLeft: recuo(nivel) }}
         className={cn("py-1.5 text-xs text-[var(--text-muted)]", onClick && "group-hover:text-[var(--primary)]")}>
         {conteudo}
       </td>
@@ -396,7 +449,7 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
   // Blocos para escolher no vínculo: o caminho inteiro, para não confundir.
   const caminho = (b: Bloco): string => {
     const pai = b.pai_id ? blocos.find((x) => x.id === b.pai_id) : null;
-    return pai ? `${caminho(pai)} › ${b.nome}` : b.nome;
+    return pai ? caminho(pai) + " › " + b.nome : b.nome;
   };
   const opcoesBloco = blocos.map((b) => ({ id: b.id, rotulo: caminho(b) })).sort((a, b) => a.rotulo.localeCompare(b.rotulo));
 
@@ -418,16 +471,16 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
       const p = pessoas.get(cd);
       const prev = new Map<string, number>();
       for (const mes of meses) {
-        const v = previstoPessoa.get(`${b.id}|${cd}|${mes}`);
+        const v = previstoPessoa.get(b.id + "|" + cd + "|" + mes);
         if (v) prev.set(mes, v);
       }
       const explicito = vinculos.has(cd);
       fora.push(linha({
-        chave: `pe-${b.id}-${cd}`, nivel: nivel + 1, previsto: prev, sistema: p?.valores,
+        chave: "pe-" + b.id + "-" + cd, nivel: nivel + 1, previsto: prev, sistema: p?.valores,
         nome: (
           <span className="inline-flex items-center gap-1">
             <span className="tabular-nums opacity-60">{cd}</span>
-            {p?.nome ?? `Pessoa ${cd}`}
+            {p?.nome ?? "Pessoa " + cd}
             {explicito && (
               <button onClick={(e) => { e.stopPropagation(); desvincular(cd); }} title="Desfazer o vínculo"
                 className="rounded p-0.5 text-[var(--text-muted)] hover:text-red-600"><X size={11} /></button>
@@ -442,7 +495,7 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
       if (bloco !== b.id) continue;
       const rotulo = GRUPOS_ERP.find((g) => g.id === grupo)?.rotulo ?? grupo;
       fora.push(linha({
-        chave: `rg-${b.id}-${grupo}`, nivel: nivel + 1, sistema: restoDoGrupo(grupo),
+        chave: "rg-" + b.id + "-" + grupo, nivel: nivel + 1, sistema: restoDoGrupo(grupo),
         titulo: "Grupo inteiro do ERP, fechado: não abre por cliente",
         nome: <span className="inline-flex items-center gap-1"><i>{rotulo}</i>
           <span className="rounded bg-[#EEEEFD] px-1 text-[9px] font-bold uppercase text-[#0000C2] dark:bg-[#262f6b] dark:text-[#c7c9ff]">grupo</span>
@@ -453,36 +506,37 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
     // O que o bloco prevê sem apontar fornecedor nenhum.
     const semFornecedor = new Map<string, number>();
     for (const mes of meses) {
-      const total = previstoBloco.get(`${b.id}|${mes}`) ?? 0;
-      const comFornecedor = daqui.reduce((s, [cd]) => s + (previstoPessoa.get(`${b.id}|${cd}|${mes}`) ?? 0), 0);
+      const total = previstoBloco.get(b.id + "|" + mes) ?? 0;
+      const comFornecedor = daqui.reduce((s, [cd]) => s + (previstoPessoa.get(b.id + "|" + cd + "|" + mes) ?? 0), 0);
       const resto = Math.round((total - comFornecedor) * 100) / 100;
       if (resto) semFornecedor.set(mes, resto);
     }
     if (semFornecedor.size) {
       fora.push(linha({
-        chave: `sf-${b.id}`, nivel: nivel + 1, previsto: semFornecedor,
+        chave: "sf-" + b.id, nivel: nivel + 1, previsto: semFornecedor,
         nome: <i>Previsto sem fornecedor apontado</i>,
         titulo: "Linhas deste bloco que ainda não apontam um fornecedor do ERP",
       }));
     }
     if (fora.length === 0 && filhosDe(b.id).length === 0) {
-      fora.push(linhaTexto(`v-${b.id}`, "Nada previsto nem vinculado neste bloco.", nivel + 1));
+      fora.push(linhaTexto("v-" + b.id, "Nada previsto nem vinculado neste bloco.", nivel + 1));
     }
     return fora;
   }
 
   function linhasDaArvore(b: Bloco, nivel: number, zebra?: boolean): ReactNode[] {
+    const previsto = somaDaArvore(b.id, previstoBloco);
+    const sistema = somaDaArvore(b.id, sistemaBloco);
+    if (soFora && !foraDaRegua(previsto, sistema)) return [];
     const fora: ReactNode[] = [];
     const aberto = abertos.has(b.id);
-    const filhos = filhosDe(b.id);
     fora.push(linha({
-      chave: `b-${b.id}`, nivel, zebra, forte: true, onClick: () => alternar(b.id),
-      previsto: somaDaArvore(b.id, previstoBloco), sistema: somaDaArvore(b.id, sistemaBloco),
+      chave: "b-" + b.id, nivel, zebra, forte: true, onClick: () => alternar(b.id), previsto, sistema,
       nome: <span className="inline-flex items-center gap-1">{aberto ? <ChevronDown size={13} /> : <ChevronRight size={13} />}{b.nome}</span>,
     }));
     if (!aberto) return fora;
     fora.push(...linhasDoBloco(b, nivel));
-    for (const f of filhos) fora.push(...linhasDaArvore(f, nivel + 1));
+    for (const f of filhosDe(b.id)) fora.push(...linhasDaArvore(f, nivel + 1));
     return fora;
   }
 
@@ -504,7 +558,7 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
   if (abertoSoltas) {
     for (const s of soltas.linhas) {
       linhas.push(linha({
-        chave: `s-${s.cd_pessoa}`, nivel: 1, sistema: s.valores,
+        chave: "s-" + s.cd_pessoa, nivel: 1, sistema: s.valores,
         nome: (
           <span className="inline-flex items-center gap-1">
             <span className="tabular-nums opacity-60">{s.cd_pessoa}</span>
@@ -522,25 +576,40 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
           Mais {(soltas.total - soltas.linhas.length).toLocaleString("pt-BR")} sem vínculo
           <button onClick={(e) => { e.stopPropagation(); if (!soltas.carregando) carregarSoltas(soltas.linhas.length); }}
             className="rounded border border-[var(--border)] bg-[var(--surface)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--text)] hover:text-[var(--primary)]">
-            {soltas.carregando ? <Loader2 size={10} className="inline animate-spin" /> : `+ ${POR_PAGINA}`}
+            {soltas.carregando ? <Loader2 size={10} className="inline animate-spin" /> : "+ " + POR_PAGINA}
           </button>
           <button onClick={(e) => { e.stopPropagation(); if (!soltas.carregando) carregarTodas(); }}
             className="rounded border border-[var(--border)] bg-[var(--surface)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--text)] hover:text-[var(--primary)]">
             mostrar todos
           </button>
         </span>, 1));
-    } else if (soltas.total === 0 && !soltas.carregando) {
-      linhaTexto("s-vazio", "Todo o movimento do ERP está vinculado a um bloco.", 1);
     }
   }
 
   const totalPrevisto = somaMapas(filhosDe(null).map((b) => somaDaArvore(b.id, previstoBloco)));
+
+  // Quanto do movimento do ERP já aponta um bloco (em valor absoluto).
+  const atribuido = meses.reduce((soma, mes) =>
+    soma + blocos.reduce((s, b) => s + Math.abs(sistemaBloco.get(b.id + "|" + mes) ?? 0), 0), 0);
+  const solto = meses.reduce((s, mes) => s + Math.abs(semVinculo.get(mes) ?? 0), 0);
+  const cobertura = atribuido + solto > 0 ? Math.round((atribuido / (atribuido + solto)) * 100) : 0;
+
   const sel = "rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5 text-sm text-[var(--text)]";
+  const botao = (ativo: boolean) => cn("rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors",
+    ativo ? "border-[var(--primary)] bg-[var(--primary)] text-white" : "border-[var(--border)] bg-[var(--surface)] text-[var(--text-muted)] hover:text-[var(--text)]");
+  const atalho = (rotulo: string, novoDe: string, novoAte: string) => (
+    <button key={rotulo} onClick={() => { setDe(novoDe); setAte(novoAte); }}
+      className={botao(de === novoDe && ate === novoAte)}>{rotulo}</button>
+  );
+  const cabecalhoTotal = modo === "tres" ? ["Previsto", "Realizado", "Dif."] : [MODOS.find((m) => m.id === modo)!.rotulo];
 
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
-        <label className="text-xs text-[var(--text-muted)]" htmlFor="cz-de">De</label>
+        {atalho("Ano", hoje.slice(0, 4) + "-01-01", hoje.slice(0, 4) + "-12-01")}
+        {atalho("Últimos 6", somarMeses(hoje, -5), hoje)}
+        {atalho("Próximos 6", hoje, somarMeses(hoje, 5))}
+        <label className="ml-1 text-xs text-[var(--text-muted)]" htmlFor="cz-de">De</label>
         <select id="cz-de" value={de} onChange={(e) => setDe(e.target.value)} className={sel}>
           {opcoes.map((m) => <option key={m} value={m}>{rotuloMes(m)}</option>)}
         </select>
@@ -548,24 +617,32 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
         <select id="cz-ate" value={ate} onChange={(e) => setAte(e.target.value)} className={sel}>
           {opcoes.map((m) => <option key={m} value={m}>{rotuloMes(m)}</option>)}
         </select>
-        <span className="text-xs text-[var(--text-muted)]">
-          {vinculos.size + pessoasLigadas.size > 0
-            ? `${pessoasLigadas.size} fornecedor(es) vinculado(s)`
-            : "nenhum fornecedor vinculado ainda"}
-        </span>
-        <span className="text-xs text-[var(--text-muted)]">
-          {sincronizado ? `ERP sincronizado em ${new Date(sincronizado).toLocaleString("pt-BR")}` : "ERP ainda não sincronizado"}
-        </span>
-        <button onClick={() => setMostrarDif((v) => !v)}
-          className={cn("ml-auto rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors",
-            mostrarDif ? "border-[var(--primary)] bg-[var(--primary)] text-white" : "border-[var(--border)] bg-[var(--surface)] text-[var(--text-muted)] hover:text-[var(--text)]")}>
-          Diferença {mostrarDif ? "•" : ""}
+
+        <div className="ml-auto flex rounded-lg border border-[var(--border)] bg-[var(--surface)] p-0.5">
+          {MODOS.map((m) => (
+            <button key={m.id} onClick={() => setModo(m.id)}
+              className={cn("rounded-md px-2.5 py-1 text-xs font-semibold transition-colors",
+                modo === m.id ? "bg-[var(--primary)] text-white" : "text-[var(--text-muted)] hover:text-[var(--text)]")}>
+              {m.rotulo}
+            </button>
+          ))}
+        </div>
+        <button onClick={() => setSoFora((v) => !v)} className={botao(soFora)} title="Esconde os blocos dentro de ±5% do previsto">
+          Só o que está fora {soFora ? "•" : ""}
         </button>
-        <button onClick={() => setMilhares((v) => !v)}
-          className={cn("rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors",
-            milhares ? "border-[var(--primary)] bg-[var(--primary)] text-white" : "border-[var(--border)] bg-[var(--surface)] text-[var(--text-muted)] hover:text-[var(--text)]")}>
-          R$ mil {milhares ? "•" : ""}
-        </button>
+        <button onClick={() => setMilhares((v) => !v)} className={botao(milhares)}>R$ mil {milhares ? "•" : ""}</button>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3 text-xs text-[var(--text-muted)]">
+        <div className="h-2 w-40 overflow-hidden rounded-full bg-[var(--border)]" title="Parte do movimento do ERP que já aponta um bloco">
+          <div className="h-full rounded-full bg-[var(--primary)]" style={{ width: cobertura + "%" }} />
+        </div>
+        <span>
+          <b className="text-[var(--text)]">{cobertura}%</b> do movimento do ERP no período já está vinculado
+          {solto > 0 && <> · faltam R$ {formatReais(solto)}</>}
+        </span>
+        <span>{pessoasLigadas.size} fornecedor(es) vinculado(s)</span>
+        <span>{sincronizado ? "ERP sincronizado em " + new Date(sincronizado).toLocaleString("pt-BR") : "ERP ainda não sincronizado"}</span>
       </div>
 
       {erro && <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{erro}</div>}
@@ -573,41 +650,62 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
       {meses.length === 0 ? (
         <p className="py-10 text-center text-sm text-[var(--text-muted)]">O mês inicial precisa ser anterior ao final.</p>
       ) : (
-        <div className={cn("max-h-[calc(100vh-19rem)] min-h-64 overflow-auto rounded-xl border border-[var(--border)] bg-[var(--surface)]", carregando && "opacity-60")}>
+        <div className={cn("max-h-[calc(100vh-20rem)] min-h-64 overflow-auto rounded-xl border border-[var(--border)] bg-[var(--surface)]", carregando && "opacity-60")}>
           <table className="min-w-full text-[13px]">
             <thead>
               <tr className="text-white">
-                <th rowSpan={2} style={{ backgroundColor: AZUL }} className="sticky left-0 top-0 z-30 w-[30rem] min-w-[30rem] px-3 py-2 text-left font-semibold">
+                <th rowSpan={2} style={{ backgroundColor: AZUL }} className="sticky left-0 top-0 z-40 w-[30rem] min-w-[30rem] px-3 py-2 text-left font-semibold">
                   Bloco / fornecedor {milhares && <span className="font-normal opacity-75">· R$ mil</span>}
                 </th>
                 {meses.map((m, i) => (
-                  <th key={m} colSpan={mostrarDif ? 3 : 2} style={{ backgroundColor: i % 2 === 1 ? AZUL_ALT : AZUL }}
+                  <th key={m} colSpan={colsPorMes} style={{ backgroundColor: i % 2 === 1 ? AZUL_ALT : AZUL }}
                     className={cn("sticky top-0 z-20 border-l-2 border-white/25 px-2 py-1.5 text-center font-semibold", m === hoje && "underline decoration-2 underline-offset-4")}>
                     {rotuloMes(m)}
                   </th>
                 ))}
+                <th colSpan={colsPorMes} style={{ backgroundColor: AZUL, right: 0, width: colsPorMes * LARG_TOTAL }}
+                  className="sticky top-0 z-40 border-l-2 border-white/60 px-2 py-1.5 text-center font-semibold">
+                  Total do período
+                </th>
               </tr>
               <tr className="text-white/80">
                 {meses.map((m, i) => (
                   <Fragment key={m}>
-                    <th style={{ backgroundColor: i % 2 === 1 ? AZUL_ALT : AZUL }} className="sticky top-8 z-20 border-l-2 border-white/25 px-2 py-1 text-right font-normal">Previsto</th>
-                    <th style={{ backgroundColor: i % 2 === 1 ? AZUL_ALT : AZUL }} className="sticky top-8 z-20 px-2 py-1 text-right font-normal">{rotuloSistema(m)}</th>
-                    {mostrarDif && (
-                      <th style={{ backgroundColor: i % 2 === 1 ? AZUL_ALT : AZUL }} className="sticky top-8 z-20 px-2 py-1 pr-3 text-right font-normal">{m > hoje ? "% no ERP" : "Dif."}</th>
+                    {(modo === "tres" || modo === "previsto") && (
+                      <th style={{ backgroundColor: i % 2 === 1 ? AZUL_ALT : AZUL }} className="sticky top-8 z-20 border-l-2 border-white/25 px-2 py-1 text-right font-normal">Previsto</th>
+                    )}
+                    {(modo === "tres" || modo === "sistema") && (
+                      <th style={{ backgroundColor: i % 2 === 1 ? AZUL_ALT : AZUL }} className={cn("sticky top-8 z-20 px-2 py-1 text-right font-normal", modo === "sistema" && "border-l-2 border-white/25")}>{rotuloSistema(m)}</th>
+                    )}
+                    {(modo === "tres" || modo === "dif") && (
+                      <th style={{ backgroundColor: i % 2 === 1 ? AZUL_ALT : AZUL }} className={cn("sticky top-8 z-20 px-2 py-1 pr-3 text-right font-normal", modo === "dif" && "border-l-2 border-white/25")}>{m > hoje ? "% no ERP" : "Dif."}</th>
                     )}
                   </Fragment>
+                ))}
+                {cabecalhoTotal.map((rotulo, i) => (
+                  <th key={rotulo} style={{ backgroundColor: AZUL, right: (cabecalhoTotal.length - 1 - i) * LARG_TOTAL, width: LARG_TOTAL }}
+                    className={cn("sticky top-8 z-40 px-2 py-1 text-right font-normal", i === 0 && "border-l-2 border-white/60")}>
+                    {rotulo}
+                  </th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {linhas.map((l, i) => <Fragment key={i}>{l}</Fragment>)}
-              <tr className="border-t-2 border-slate-300 font-extrabold dark:border-slate-600">
-                <td className="sticky left-0 z-10 bg-[var(--surface)] px-3 py-2 uppercase tracking-wide text-[var(--text)] shadow-[2px_0_4px_rgba(0,0,0,0.05)]">
+            </tbody>
+            <tfoot>
+              <tr className="font-extrabold">
+                <td className="sticky bottom-0 left-0 z-30 border-t-2 border-slate-300 bg-[var(--surface)] px-3 py-2 uppercase tracking-wide text-[var(--text)] shadow-[2px_0_4px_rgba(0,0,0,0.05)] dark:border-slate-600">
                   Total do mês
                 </td>
-                {celulas((m) => totalPrevisto.get(m) ?? 0, (m) => totalErp.get(m) ?? 0, true)}
+                {meses.map((mes, i) => colunas(totalPrevisto.get(mes) ?? 0, totalErp.get(mes) ?? 0,
+                  { mes, i, negrito: true, rodape: true, bg: "bg-[var(--surface)]" }))}
+                {colunas(
+                  meses.reduce((a, m) => a + (totalPrevisto.get(m) ?? 0), 0),
+                  meses.reduce((a, m) => a + (totalErp.get(m) ?? 0), 0),
+                  { negrito: true, total: true, rodape: true, bg: "bg-[var(--surface)]" })}
               </tr>
-            </tbody>
+            </tfoot>
           </table>
         </div>
       )}
@@ -642,7 +740,8 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
         <p>
           As linhas são os mesmos blocos do Fluxo próprio. <b>Previsto</b> vem do controle manual (lançamentos ativos e premissas).
           <b> Sistema</b> é o movimento no ERP dos fornecedores vinculados àquele bloco — pelo fornecedor apontado na linha do lançamento
-          ou pelo vínculo feito aqui. Abra um bloco para ver fornecedor a fornecedor.
+          ou pelo vínculo feito aqui. Abra um bloco para ver fornecedor a fornecedor; use <b>Os três / Previsto / Realizado / Diferença</b>
+          para ver os três números ou um só por mês.
         </p>
         <p>
           <b>Sem vínculo no ERP</b> reúne quem ainda não aponta bloco nenhum; escolha o bloco na caixinha ao lado do nome e ele passa a
