@@ -370,7 +370,7 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
     const bg = opts.zebra ? "bg-[#F1F2F6] dark:bg-neutral-800" : "bg-[var(--surface)]";
     return (
       <tr key={opts.chave} onClick={opts.onClick}
-        className={cn("group border-t border-[var(--border)] hover:bg-[#EDEDFA] dark:hover:bg-[#191934]",
+        className={cn("group h-[26px] border-t border-[var(--border)] hover:bg-[#EDEDFA] dark:hover:bg-[#191934]",
           opts.zebra && "bg-[#F1F2F6] dark:bg-neutral-800", opts.onClick && "cursor-pointer",
           opts.nivel === 0 && "border-t-slate-300 dark:border-t-slate-600")}>
         <td style={{ paddingLeft: recuo(opts.nivel) }} title={opts.titulo}
@@ -385,7 +385,7 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
   }
 
   const linhaTexto = (chave: string, conteudo: ReactNode, nivel: number, onClick?: () => void) => (
-    <tr key={chave} onClick={onClick} className={cn("border-t border-[var(--border)]", onClick && "group cursor-pointer hover:bg-[#EDEDFA] dark:hover:bg-[#191934]")}>
+    <tr key={chave} onClick={onClick} className={cn("h-[26px] border-t border-[var(--border)]", onClick && "group cursor-pointer hover:bg-[#EDEDFA] dark:hover:bg-[#191934]")}>
       <td colSpan={meses.length * (mostrarDif ? 3 : 2) + 1} style={{ paddingLeft: recuo(nivel) }}
         className={cn("py-1.5 text-xs text-[var(--text-muted)]", onClick && "group-hover:text-[var(--primary)]")}>
         {conteudo}

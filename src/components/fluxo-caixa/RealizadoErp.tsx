@@ -220,7 +220,7 @@ export default function RealizadoErp({ empresaId }: { empresaId: number }) {
     const eTotal = opts.nivel === "total";
     return (
       <tr key={opts.chave} onClick={opts.onClick}
-        className={cn("group", opts.zebra && ZEBRA, HOVER, opts.onClick && "cursor-pointer",
+        className={cn("group h-[26px]", opts.zebra && ZEBRA, HOVER, opts.onClick && "cursor-pointer",
           opts.nivel === 0 ? "border-t border-slate-300 font-bold dark:border-slate-600"
             : eTotal ? cn("border-t border-slate-300 font-extrabold dark:border-slate-600", opts.primeiro && "border-t-2") : "border-t border-[var(--border)]")}>
         <td className={cn("sticky left-0 z-10 max-w-[24rem] truncate whitespace-nowrap py-1.5 pr-3 shadow-[2px_0_4px_rgba(0,0,0,0.05)]", bg, HOVER_FIXA,

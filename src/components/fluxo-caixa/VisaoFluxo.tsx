@@ -192,7 +192,7 @@ export default function VisaoFluxo({
 
   function linhaTexto(chave: string, conteudo: ReactNode, recuo: number, onClick?: () => void) {
     return (
-      <tr key={chave} onClick={onClick} className={cn("border-t border-[var(--border)]", onClick && cn("group cursor-pointer", HOVER))}>
+      <tr key={chave} onClick={onClick} className={cn("h-[26px] border-t border-[var(--border)]", onClick && cn("group cursor-pointer", HOVER))}>
         <td colSpan={meses.length + 2} className={cn("py-1.5 text-xs text-[var(--text-muted)]", onClick && "group-hover:text-[var(--primary)]")}
           style={{ paddingLeft: recuo }}>
           {conteudo}
@@ -209,7 +209,7 @@ export default function VisaoFluxo({
     const bg = opts.zebra ? ZEBRA : "bg-[var(--surface)]";
     return (
       <tr key={opts.chave} onClick={opts.onClick}
-        className={cn("group", opts.zebra && ZEBRA, HOVER, opts.onClick && "cursor-pointer",
+        className={cn("group h-[26px]", opts.zebra && ZEBRA, HOVER, opts.onClick && "cursor-pointer",
           opts.nivel === 0 ? "border-t border-slate-300 font-bold dark:border-slate-600" : "border-t border-[var(--border)]",
           opts.subtitulo && "font-semibold")}>
         <td className={cn("sticky left-0 z-10 max-w-[22rem] truncate whitespace-nowrap py-1.5 pr-3 shadow-[2px_0_4px_rgba(0,0,0,0.05)]", bg, HOVER_FIXA,
