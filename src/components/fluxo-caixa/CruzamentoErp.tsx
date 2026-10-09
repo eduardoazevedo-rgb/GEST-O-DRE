@@ -68,6 +68,7 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
   const [erro, setErro] = useState("");
   const [abertos, setAbertos] = useState<Set<string>>(new Set());
   const [painelRegras, setPainelRegras] = useState(false);
+  const [mostrarDif, setMostrarDif] = useState(true); // desligado, cabem mais meses na tela
   const [versao, setVersao] = useState(0); // sobe a cada vínculo criado ou desfeito
 
   const meses = useMemo(() => (de <= ate ? listarMeses(de, ate) : []), [de, ate]);
@@ -334,16 +335,18 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
       const futuro = mes > hoje;
       // Com sinais opostos (ex.: previsto de entrada, ERP com saída) a razão não significa nada.
       const cobertura = p !== 0 && (s === 0 || Math.sign(s) === Math.sign(p)) ? Math.round((Math.abs(s) / Math.abs(p)) * 100) : null;
-      const cel = cn("px-2 text-right tabular-nums whitespace-nowrap", miudo ? "py-1" : "py-1.5", negrito && "font-bold");
+      const cel = cn("px-2.5 text-right tabular-nums whitespace-nowrap", miudo ? "py-1" : "py-1.5", negrito && "font-bold");
       const vazio = <span className="text-[var(--text-muted)]/40">–</span>;
-      const zebra = i % 2 === 1 && "bg-black/[0.015] dark:bg-white/[0.02]";
+      // Faixa alternada por mês e um tom a mais no mês corrente, para o olho
+      // não se perder entre tantas colunas.
+      const zebra = mes === hoje ? "bg-[#EEEEFD]/70 dark:bg-[#262f6b]/40" : i % 2 === 1 && "bg-black/[0.015] dark:bg-white/[0.02]";
       return (
         <Fragment key={mes}>
-          <td className={cn(cel, "border-l-2 border-slate-200 text-[var(--text-muted)] dark:border-slate-700", zebra)}>
+          <td className={cn(cel, "border-l-2 border-slate-300 text-[var(--text-muted)] dark:border-slate-600", zebra)}>
             {p ? formatGrade(p, milhares) : vazio}
           </td>
-          <td className={cn(cel, zebra)}>{s ? formatGrade(s, milhares) : vazio}</td>
-          {futuro ? (
+          <td className={cn(cel, !mostrarDif && "pr-3 font-medium text-[var(--text)]", zebra)}>{s ? formatGrade(s, milhares) : vazio}</td>
+          {!mostrarDif ? null : futuro ? (
             <td title={cobertura != null ? `${formatReais(Math.abs(s))} já lançado de ${formatReais(Math.abs(p))} previsto` : undefined}
               className={cn(cel, "pr-3 font-normal text-[var(--text-muted)]", zebra)}>
               {cobertura != null ? `${cobertura}%` : vazio}
@@ -371,7 +374,7 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
           opts.zebra && "bg-[#F1F2F6] dark:bg-neutral-800", opts.onClick && "cursor-pointer",
           opts.nivel === 0 && "border-t-slate-300 dark:border-t-slate-600")}>
         <td style={{ paddingLeft: recuo(opts.nivel) }} title={opts.titulo}
-          className={cn("sticky left-0 z-10 max-w-[38rem] truncate whitespace-nowrap py-1.5 pr-3 shadow-[2px_0_4px_rgba(0,0,0,0.05)]",
+          className={cn("sticky left-0 z-10 w-[30rem] min-w-[30rem] max-w-[30rem] truncate whitespace-nowrap py-1.5 pr-3 shadow-[2px_0_4px_rgba(0,0,0,0.05)]",
             bg, "group-hover:bg-[#EDEDFA] dark:group-hover:bg-[#191934]",
             opts.forte ? "font-semibold text-[var(--text)]" : "text-[var(--text-muted)]")}>
           {opts.nome}
@@ -383,7 +386,7 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
 
   const linhaTexto = (chave: string, conteudo: ReactNode, nivel: number, onClick?: () => void) => (
     <tr key={chave} onClick={onClick} className={cn("border-t border-[var(--border)]", onClick && "group cursor-pointer hover:bg-[#EDEDFA] dark:hover:bg-[#191934]")}>
-      <td colSpan={meses.length * 3 + 1} style={{ paddingLeft: recuo(nivel) }}
+      <td colSpan={meses.length * (mostrarDif ? 3 : 2) + 1} style={{ paddingLeft: recuo(nivel) }}
         className={cn("py-1.5 text-xs text-[var(--text-muted)]", onClick && "group-hover:text-[var(--primary)]")}>
         {conteudo}
       </td>
@@ -553,8 +556,13 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
         <span className="text-xs text-[var(--text-muted)]">
           {sincronizado ? `ERP sincronizado em ${new Date(sincronizado).toLocaleString("pt-BR")}` : "ERP ainda não sincronizado"}
         </span>
-        <button onClick={() => setMilhares((v) => !v)}
+        <button onClick={() => setMostrarDif((v) => !v)}
           className={cn("ml-auto rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors",
+            mostrarDif ? "border-[var(--primary)] bg-[var(--primary)] text-white" : "border-[var(--border)] bg-[var(--surface)] text-[var(--text-muted)] hover:text-[var(--text)]")}>
+          Diferença {mostrarDif ? "•" : ""}
+        </button>
+        <button onClick={() => setMilhares((v) => !v)}
+          className={cn("rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors",
             milhares ? "border-[var(--primary)] bg-[var(--primary)] text-white" : "border-[var(--border)] bg-[var(--surface)] text-[var(--text-muted)] hover:text-[var(--text)]")}>
           R$ mil {milhares ? "•" : ""}
         </button>
@@ -566,14 +574,14 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
         <p className="py-10 text-center text-sm text-[var(--text-muted)]">O mês inicial precisa ser anterior ao final.</p>
       ) : (
         <div className={cn("max-h-[calc(100vh-19rem)] min-h-64 overflow-auto rounded-xl border border-[var(--border)] bg-[var(--surface)]", carregando && "opacity-60")}>
-          <table className="min-w-full text-xs">
+          <table className="min-w-full text-[13px]">
             <thead>
               <tr className="text-white">
-                <th rowSpan={2} style={{ backgroundColor: AZUL }} className="sticky left-0 top-0 z-30 min-w-[28rem] px-3 py-2 text-left font-semibold">
+                <th rowSpan={2} style={{ backgroundColor: AZUL }} className="sticky left-0 top-0 z-30 w-[30rem] min-w-[30rem] px-3 py-2 text-left font-semibold">
                   Bloco / fornecedor {milhares && <span className="font-normal opacity-75">· R$ mil</span>}
                 </th>
                 {meses.map((m, i) => (
-                  <th key={m} colSpan={3} style={{ backgroundColor: i % 2 === 1 ? AZUL_ALT : AZUL }}
+                  <th key={m} colSpan={mostrarDif ? 3 : 2} style={{ backgroundColor: i % 2 === 1 ? AZUL_ALT : AZUL }}
                     className={cn("sticky top-0 z-20 border-l-2 border-white/25 px-2 py-1.5 text-center font-semibold", m === hoje && "underline decoration-2 underline-offset-4")}>
                     {rotuloMes(m)}
                   </th>
@@ -584,7 +592,9 @@ export default function CruzamentoErp({ empresaId, blocos, lancamentos, premissa
                   <Fragment key={m}>
                     <th style={{ backgroundColor: i % 2 === 1 ? AZUL_ALT : AZUL }} className="sticky top-8 z-20 border-l-2 border-white/25 px-2 py-1 text-right font-normal">Previsto</th>
                     <th style={{ backgroundColor: i % 2 === 1 ? AZUL_ALT : AZUL }} className="sticky top-8 z-20 px-2 py-1 text-right font-normal">{rotuloSistema(m)}</th>
-                    <th style={{ backgroundColor: i % 2 === 1 ? AZUL_ALT : AZUL }} className="sticky top-8 z-20 px-2 py-1 pr-3 text-right font-normal">{m > hoje ? "% no ERP" : "Dif."}</th>
+                    {mostrarDif && (
+                      <th style={{ backgroundColor: i % 2 === 1 ? AZUL_ALT : AZUL }} className="sticky top-8 z-20 px-2 py-1 pr-3 text-right font-normal">{m > hoje ? "% no ERP" : "Dif."}</th>
+                    )}
                   </Fragment>
                 ))}
               </tr>
